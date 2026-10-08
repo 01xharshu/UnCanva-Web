@@ -1,0 +1,51 @@
+{
+  "name": "uncanva",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --webpack",
+    "build": "next build --webpack && node scripts/offline.mjs",
+    "start": "npm run serve",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "assets": "node scripts/assets.mjs",
+    "serve": "node scripts/serve.mjs",
+    "format": "prettier --write src tests scripts *.ts *.mjs"
+  },
+  "dependencies": {
+    "@jsquash/avif": "^2.1.1",
+    "@jsquash/jxl": "^1.3.0",
+    "ag-psd": "^31.0.3",
+    "gifenc": "^1.0.3",
+    "jspdf": "^4.2.1",
+    "lucide-react": "^0.468.0",
+    "next": "^16.4.0",
+    "onnxruntime-web": "1.30.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "utif": "^3.1.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@playwright/test": "^1.55.0",
+    "@tailwindcss/postcss": "^4.1.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/utif": "^3.0.6",
+    "eslint": "^9.0.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "fake-indexeddb": "^6.0.0",
+    "prettier": "^3.9.9",
+    "tailwindcss": "^4.1.0",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.71.1",
+    "vitest": "^5.0.3"
+  },
+  "engines": {
+    "node": "^22.13.0 || ^24.0.0 || >=26"
+  },
+  "type": "module"
+}

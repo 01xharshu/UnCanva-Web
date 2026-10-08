@@ -1,0 +1,12 @@
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+test-results/
+playwright-report/
+public/runtime/
+public/models/*.onnx
+
+public/codecs/*.wasm
+output/
+tmp/

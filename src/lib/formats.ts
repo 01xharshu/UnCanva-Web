@@ -1,0 +1,111 @@
+export const formats = [
+  {
+    mime: "image/png",
+    ext: "png",
+    label: "PNG",
+    note: "Lossless · full transparency",
+    quality: false,
+  },
+  {
+    mime: "image/jpeg",
+    ext: "jpg",
+    label: "JPEG",
+    note: "Compressed · white background",
+    quality: true,
+  },
+  {
+    mime: "image/webp",
+    ext: "webp",
+    label: "WebP",
+    note: "Compressed · full transparency",
+    quality: true,
+  },
+  {
+    mime: "image/avif",
+    ext: "avif",
+    label: "AVIF",
+    note: "Modern compression · local WASM encoder",
+    quality: true,
+  },
+  {
+    mime: "image/jxl",
+    ext: "jxl",
+    label: "JPEG XL",
+    note: "Modern compression · local WASM encoder",
+    quality: true,
+  },
+  {
+    mime: "image/gif",
+    ext: "gif",
+    label: "GIF",
+    note: "Still image · 256 colors · 1-bit transparency",
+    quality: false,
+  },
+  {
+    mime: "image/tiff",
+    ext: "tiff",
+    label: "TIFF",
+    note: "Uncompressed RGBA · larger files",
+    quality: false,
+  },
+  {
+    mime: "image/bmp",
+    ext: "bmp",
+    label: "BMP",
+    note: "24-bit bitmap · white background",
+    quality: false,
+  },
+  {
+    mime: "image/x-icon",
+    ext: "ico",
+    label: "ICO",
+    note: "PNG icon · fits a square up to 256 px",
+    quality: false,
+  },
+  {
+    mime: "image/svg+xml",
+    ext: "svg",
+    label: "SVG",
+    note: "Raster image embedded in an SVG wrapper",
+    quality: false,
+  },
+  {
+    mime: "image/vnd.adobe.photoshop",
+    ext: "psd",
+    label: "PSD",
+    note: "Flattened raster composite · use .uncanva for editable layers",
+    quality: false,
+  },
+  {
+    mime: "image/x-tga",
+    ext: "tga",
+    label: "TGA",
+    note: "32-bit RGBA · uncompressed",
+    quality: false,
+  },
+  {
+    mime: "image/x-portable-pixmap",
+    ext: "ppm",
+    label: "PPM",
+    note: "Portable RGB bitmap · white background",
+    quality: false,
+  },
+  {
+    mime: "image/qoi",
+    ext: "qoi",
+    label: "QOI",
+    note: "Lossless RGBA · simple interchange format",
+    quality: false,
+  },
+  {
+    mime: "application/pdf",
+    ext: "pdf",
+    label: "PDF",
+    note: "Raster pages · all artboards become one multipage PDF",
+    quality: false,
+  },
+] as const;
+export const formatInfo = (mime: string) =>
+  formats.find((f) => f.mime === mime) || formats[0];
+export const acceptImages =
+  "image/*,.png,.jpg,.jpeg,.jfif,.webp,.avif,.gif,.bmp,.tif,.tiff,.ico,.svg,.psd,.jxl,.tga,.ppm,.qoi,.heic,.heif";
