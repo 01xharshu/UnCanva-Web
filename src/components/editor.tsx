@@ -36,6 +36,7 @@ import {
 } from "@/lib/document";
 import {
   getAsset,
+  compactAssets,
   loadProject,
   putAsset,
   restoreBackup,
@@ -44,10 +45,17 @@ import {
 import { download, encode, original, renderBoard } from "@/lib/render";
 import { IconButton } from "./editor-ui";
 import PagesPanel from "./pages-panel";
+import DeviceSetup from "./device-setup";
+import { previewSize } from "@/lib/device";
+import ProjectGallery from "./project-gallery";
+import { useEditorLock } from "./use-editor-lock";
 import PropertiesPanel from "./properties-panel";
 import { Tool } from "./types";
 import { formats, formatInfo, acceptImages } from "@/lib/formats";
 import { decodeImport } from "@/lib/codecs";
+import { applyStroke } from "@/lib/mask";
+import { SubjectRegion, subjectRegion, regionPixels } from "@/lib/ai-region";
+import { ModelId } from "@/lib/ai-models";
 import { exportPDF } from "@/lib/pdf-export";
 const tools = [
   ["select", MousePointer2, "Select · V"],
@@ -61,6 +69,11 @@ const tools = [
   ["zoom", ZoomIn, "Zoom · Z"],
 ] as const;
 export default function Editor() {
+  const readOnly = useEditorLock();
+  const [setup, setSetup] = useState(false);
+  const [gallery, setGallery] = useState(false);
+  const editable = useRef(true);
+  editable.current = !readOnly;
   const [project, setProject] = useState<Project | null>(null),
     [selected, setSelected] = useState<string | null>(null),
     [tool, setTool] = useState<Tool>("select"),
@@ -75,6 +88,25 @@ export default function Editor() {
     [busy, setBusy] = useState(""),
     [sidebar, setSidebar] = useState(true),
     [ready, setReady] = useState(false);
+  const [modelId, setModelId] = useState<ModelId>("detail");
+  const [subjectArea, setSubjectArea] = useState<{
+    layerId: string;
+    rect: SubjectRegion;
+  } | null>(null);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  useEffect(() => {
+    try {
+      const preferred = localStorage.getItem("uncanva-background-model");
+      if (
+        preferred === "general" ||
+        preferred === "detail" ||
+        preferred === "portrait"
+      )
+        setModelId(preferred);
+    } catch {
+      /* Model selection still works when preferences cannot be stored. */
+    }
+  }, []);
   const [brush, setBrush] = useState({
       size: 50,
       hardness: 0.8,
@@ -93,19 +125,59 @@ export default function Editor() {
     fileRef = useRef<HTMLInputElement>(null),
     backupRef = useRef<HTMLInputElement>(null),
     canvasRef = useRef<HTMLCanvasElement>(null),
+    previewAdjustments = useRef(""),
     workspace = useRef<HTMLDivElement>(null),
     aiRef = useRef<Worker | null>(null),
     saveChain = useRef(Promise.resolve());
+  useEffect(() => {
+    if (!showExport && !gallery && !setup) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const dialog = document.querySelector<HTMLElement>('[aria-modal="true"]');
+    if (!dialog) return;
+    const items = () =>
+      Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'button:not(:disabled),input:not(:disabled):not([type="hidden"]),select:not(:disabled),a[href]',
+        ),
+      ).filter((n) => n.getClientRects().length);
+    items()[0]?.focus();
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setShowExport(false);
+        setGallery(false);
+        setSetup(false);
+      }
+      if (e.key === "Tab") {
+        const list = items(),
+          first = list[0],
+          last = list.at(-1);
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last?.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first?.focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", key);
+    return () => {
+      document.removeEventListener("keydown", key);
+      previous?.focus();
+    };
+  }, [showExport, gallery, setup]);
   const board = project?.artboards.find((b) => b.id === project.active),
     layer = board?.layers.find((l) => l.id === selected);
   const commit = useCallback((next: Project) => {
+    if (!editable.current) return;
     history.current?.commit(next);
     latest.current = next;
     setProject(next);
   }, []);
   const mutate = useCallback(
     (fn: (p: Project) => void) => {
-      if (!latest.current) return;
+      if (!latest.current || !editable.current) return;
       const next = structuredClone(latest.current);
       fn(next);
       commit(next);
@@ -127,7 +199,7 @@ export default function Editor() {
       ),
     );
   const undo = useCallback((redo = false) => {
-    if (!history.current) return;
+    if (!history.current || !editable.current) return;
     const p = redo ? history.current.redo() : history.current.undo();
     latest.current = p;
     setProject(p);
@@ -158,19 +230,35 @@ export default function Editor() {
     const on = () => setOnline(navigator.onLine);
     window.addEventListener("online", on);
     window.addEventListener("offline", on);
+    const onController = () => {
+      if (navigator.serviceWorker.controller) setUpdateAvailable(true);
+    };
     if ("serviceWorker" in navigator && process.env.NODE_ENV === "production")
       navigator.serviceWorker
-        .register("/sw.js")
+        .register("/sw.js", { updateViaCache: "none" })
+        .then((registration) => {
+          if (navigator.serviceWorker.controller) {
+            navigator.serviceWorker.addEventListener(
+              "controllerchange",
+              onController,
+            );
+            void registration.update().catch(() => {});
+          }
+        })
         .catch((e) => setMessage(`Offline setup failed: ${e.message}`));
     return () => {
       mounted = false;
       window.removeEventListener("online", on);
       window.removeEventListener("offline", on);
       aiRef.current?.terminate();
+      navigator.serviceWorker?.removeEventListener(
+        "controllerchange",
+        onController,
+      );
     };
   }, []);
   useEffect(() => {
-    if (!project || !ready) return;
+    if (!project || !ready || readOnly) return;
     setStatus("Saving…");
     const id = setTimeout(() => {
       saveChain.current = saveChain.current
@@ -187,26 +275,47 @@ export default function Editor() {
         });
     }, 600);
     return () => clearTimeout(id);
-  }, [project, ready]);
+  }, [project, ready, readOnly]);
   useEffect(() => {
     if (!board) return;
     let live = true;
-    renderBoard(board)
-      .then((c) => {
-        if (live && canvasRef.current) {
-          canvasRef.current.width = c.width;
-          canvasRef.current.height = c.height;
-          canvasRef.current.getContext("2d")!.drawImage(c, 0, 0);
-        }
-      })
-      .catch((e) => setMessage(e.message));
+    const memory = (navigator as Navigator & { deviceMemory?: number })
+      .deviceMemory;
+    const preview = previewSize(
+      board.width,
+      board.height,
+      memory && memory <= 4 ? 1024 : 2048,
+    );
+    const adjustmentKey = JSON.stringify(
+      board.layers.map((l) => l.adjustments),
+    );
+    const adjustmentChanged = previewAdjustments.current !== adjustmentKey;
+    previewAdjustments.current = adjustmentKey;
+    const timer = setTimeout(
+      () => {
+        renderBoard(board, preview.width, preview.height, true)
+          .then((c) => {
+            if (live && canvasRef.current) {
+              canvasRef.current.width = c.width;
+              canvasRef.current.height = c.height;
+              canvasRef.current.getContext("2d")!.drawImage(c, 0, 0);
+            }
+          })
+          .catch((e) => {
+            if (live) setMessage(e.message);
+          });
+      },
+      adjustmentChanged ? 75 : 0,
+    );
     return () => {
       live = false;
+      clearTimeout(timer);
     };
   }, [board]);
   const importFiles = useCallback(
     async (files: File[]) => {
-      if (!latest.current) return;
+      if (!editable.current) return;
+      if (!latest.current || !editable.current) return;
       const target = latest.current.active;
       const added: Layer[] = [];
       for (const f of files) {
@@ -248,7 +357,18 @@ export default function Editor() {
         setSelected(added.at(-1)!.id);
         if (localStorage.getItem("uncanva-skip-bg") !== "true")
           setPromptId(added.at(-1)!.id);
-        setZoom(Math.min(0.7, 650 / added[0].width, 650 / added[0].height));
+        const area = workspace.current?.getBoundingClientRect();
+        setZoom(
+          Math.max(
+            0.05,
+            Math.min(
+              0.7,
+              ((area?.width || 750) - 100) / added[0].width,
+              ((area?.height || 810) - 160) / added[0].height,
+            ),
+          ),
+        );
+        setPan({ x: 0, y: 0 });
       }
     },
     [mutate],
@@ -319,6 +439,7 @@ export default function Editor() {
     return () => window.removeEventListener("keydown", key);
   }, [undo, deleteSelected]);
   async function removeBackground(id = selected) {
+    if (!editable.current) return;
     const p = latest.current,
       b = p?.artboards.find((b) => b.id === p.active),
       l = b?.layers.find((l) => l.id === id);
@@ -357,8 +478,19 @@ export default function Editor() {
               target.strokes = [];
             }
           });
+          setBusy("Rendering background mask");
+          const updated = latest.current?.artboards.find(
+            (b) => b.id === boardId,
+          );
+          if (updated) {
+            const p = previewSize(updated.width, updated.height);
+            await renderBoard(updated, p.width, p.height, true);
+            await new Promise<void>((resolve) =>
+              requestAnimationFrame(() => resolve()),
+            );
+          }
           setMessage(
-            `Background removed locally using ${e.data.backend}. Refine edges with Erase and Restore.`,
+            `Background removed locally using ${e.data.backend} (${e.data.model}). Refine edges with Erase and Restore.`,
           );
         } catch (error) {
           setMessage(String(error));
@@ -368,10 +500,97 @@ export default function Editor() {
           setBusy("");
         }
       };
-      worker.postMessage({ blob });
+      worker.postMessage({
+        blob,
+        model: modelId,
+        region: subjectArea?.layerId === l.id ? subjectArea.rect : undefined,
+      });
     } catch (e) {
       setBusy("");
       setMessage(String(e));
+    }
+  }
+  async function editSelection(action: "erase" | "keep" | "restore") {
+    if (
+      !editable.current ||
+      !layer?.asset ||
+      layer.locked ||
+      busy ||
+      subjectArea?.layerId !== layer.id
+    )
+      return;
+    const targetId = layer.id,
+      targetBoard = board!.id;
+    setBusy("Updating selected mask area");
+    try {
+      const image = await original(layer.asset),
+        mask = document.createElement("canvas");
+      mask.width = image.width;
+      mask.height = image.height;
+      const context = mask.getContext("2d")!;
+      context.fillStyle = "white";
+      context.fillRect(0, 0, mask.width, mask.height);
+      if (layer.mask) {
+        context.clearRect(0, 0, mask.width, mask.height);
+        context.drawImage(
+          await original(layer.mask),
+          0,
+          0,
+          mask.width,
+          mask.height,
+        );
+      }
+      for (const stroke of layer.strokes) applyStroke(context, stroke);
+      const area = regionPixels(subjectArea.rect, mask.width, mask.height);
+      if (action === "erase")
+        context.clearRect(area.x, area.y, area.width, area.height);
+      else if (action === "restore") {
+        context.fillStyle = "white";
+        context.fillRect(area.x, area.y, area.width, area.height);
+      } else {
+        context.clearRect(0, 0, mask.width, area.y);
+        context.clearRect(
+          0,
+          area.y + area.height,
+          mask.width,
+          mask.height - area.y - area.height,
+        );
+        context.clearRect(0, area.y, area.x, area.height);
+        context.clearRect(
+          area.x + area.width,
+          area.y,
+          mask.width - area.x - area.width,
+          area.height,
+        );
+      }
+      const blob = await new Promise<Blob>((resolve, reject) =>
+        mask.toBlob(
+          (b) => (b ? resolve(b) : reject(new Error("Mask encoding failed"))),
+          "image/png",
+        ),
+      );
+      const id = uid();
+      await putAsset(id, blob);
+      mutate((p) => {
+        const target = p.artboards
+          .find((b) => b.id === targetBoard)
+          ?.layers.find((l) => l.id === targetId);
+        if (target) {
+          target.mask = id;
+          target.strokes = [];
+        }
+      });
+      setMessage(
+        action === "erase"
+          ? "Selected area erased. Undo or Restore reveals the original pixels."
+          : action === "keep"
+            ? "Pixels outside the selection erased. Original pixels are preserved."
+            : "Selected area restored from original pixels.",
+      );
+    } catch (error) {
+      setMessage(String(error));
+    } finally {
+      setBusy("");
     }
   }
   function add(type: Layer["type"]) {
@@ -429,7 +648,15 @@ export default function Editor() {
   const drag = useRef<{
     start: [number, number];
     layer?: Layer;
-    mode: "move" | "resize" | "rotate" | "pan" | "stroke" | "crop" | "paint";
+    mode:
+      | "move"
+      | "resize"
+      | "rotate"
+      | "pan"
+      | "stroke"
+      | "crop"
+      | "paint"
+      | "subject";
     base: Project;
     pan: { x: number; y: number };
     stroke?: Stroke;
@@ -446,7 +673,7 @@ export default function Editor() {
     mode?: "resize" | "rotate",
     corner: "tl" | "tr" | "bl" | "br" = "br",
   ) {
-    if (!board || !project) return;
+    if (!board || !project || !editable.current) return;
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
     const xy = point(e);
@@ -469,6 +696,17 @@ export default function Editor() {
     }
     if (tool === "shape") {
       add("rect");
+      return;
+    }
+    if (tool === "subject") {
+      if (!layer || layer.type !== "image" || layer.locked) return;
+      drag.current = {
+        start: localPoint(layer, ...xy),
+        layer,
+        mode: "subject",
+        base: project,
+        pan,
+      };
       return;
     }
     if (tool === "crop") {
@@ -628,6 +866,16 @@ export default function Editor() {
       d.stroke!.points.push(xy);
       return;
     }
+    if (d.mode === "subject") {
+      const rect = subjectRegion(
+        d.start,
+        localPoint(d.layer!, ...xy),
+        d.layer!.width,
+        d.layer!.height,
+      );
+      setSubjectArea({ layerId: d.layer!.id, rect });
+      return;
+    }
     if (d.mode === "crop") return;
     const next = structuredClone(d.base),
       l = next.artboards
@@ -658,6 +906,30 @@ export default function Editor() {
     const d = drag.current;
     if (!d) return;
     drag.current = null;
+    if (d.mode === "subject") {
+      const rect = subjectRegion(
+        d.start,
+        localPoint(d.layer!, ...point(e)),
+        d.layer!.width,
+        d.layer!.height,
+      );
+      if (
+        rect.width * d.layer!.width < 8 ||
+        rect.height * d.layer!.height < 8
+      ) {
+        setSubjectArea(null);
+        setMessage(
+          "Draw a larger rectangle around the subject, with some background around its edges.",
+        );
+      } else {
+        setSubjectArea({ layerId: d.layer!.id, rect });
+        setMessage(
+          "Subject area set. Remove background to process this area; outside pixels become transparent. Original pixels remain available to restore.",
+        );
+      }
+      setTool("select");
+      return;
+    }
     if (d.mode === "paint") {
       d.finished = true;
       return;
@@ -724,7 +996,7 @@ export default function Editor() {
         hidden
         onChange={async (e) => {
           try {
-            if (e.target.files?.[0]) {
+            if (e.target.files?.[0] && editable.current) {
               const p = await restoreBackup(e.target.files[0]);
               commit(p);
               setSelected(null);
@@ -735,6 +1007,35 @@ export default function Editor() {
           e.target.value = "";
         }}
       />
+      {updateAvailable && (
+        <div className="update-notice" role="status">
+          A newer editor is ready. Save and reload to use its improvements.
+          <button
+            className="button"
+            disabled={!!busy}
+            onClick={async () => {
+              try {
+                await saveChain.current;
+                if (latest.current && !readOnly)
+                  await saveProject(latest.current);
+                location.reload();
+              } catch (error) {
+                setMessage(
+                  `Could not save before reload: ${String(error)}. Download a backup first.`,
+                );
+              }
+            }}
+          >
+            Save and update
+          </button>
+        </div>
+      )}
+      {readOnly && (
+        <div className="read-only" role="status">
+          Another tab is editing. This tab is read-only; close the other tab and
+          reload to edit here.
+        </div>
+      )}
       <header>
         <div className="brand">
           <span className="brand-mark">
@@ -758,6 +1059,23 @@ export default function Editor() {
           {status}
         </span>
         <div className="header-actions">
+          <button className="button" onClick={() => setSetup(true)}>
+            Device setup
+          </button>
+          <button
+            className="button"
+            onClick={() => {
+              void saveChain.current
+                .then(async () => {
+                  if (latest.current && !readOnly)
+                    await saveProject(latest.current);
+                  setGallery(true);
+                })
+                .catch((e) => setMessage(String(e)));
+            }}
+          >
+            Projects
+          </button>
           <IconButton
             title="Undo"
             onClick={() => undo()}
@@ -800,6 +1118,7 @@ export default function Editor() {
               key={id}
               title={title}
               aria-label={title}
+              aria-pressed={tool === id}
               className={tool === id ? "active" : ""}
               onClick={() => {
                 if (id === "text") add("text");
@@ -874,6 +1193,29 @@ export default function Editor() {
                 onPointerCancel={pointerUp}
                 onPointerLeave={() => setCursor(null)}
               />
+              {layer && layer.visible && subjectArea?.layerId === layer.id && (
+                <div
+                  className="ai-area-frame"
+                  style={{
+                    left: layer.x * zoom,
+                    top: layer.y * zoom,
+                    width: layer.width * zoom,
+                    height: layer.height * zoom,
+                    transform: `rotate(${layer.rotation}deg)`,
+                  }}
+                >
+                  <div
+                    className="ai-area"
+                    aria-label="Selected subject area"
+                    style={{
+                      left: `${subjectArea.rect.x * 100}%`,
+                      top: `${subjectArea.rect.y * 100}%`,
+                      width: `${subjectArea.rect.width * 100}%`,
+                      height: `${subjectArea.rect.height * 100}%`,
+                    }}
+                  />
+                </div>
+              )}
               {layer && layer.visible && tool === "select" && (
                 <div
                   className="selection"
@@ -1004,6 +1346,35 @@ export default function Editor() {
             setBrush,
             busy,
             removeBackground,
+            modelId,
+            setModelId: (id: ModelId) => {
+              setModelId(id);
+              try {
+                localStorage.setItem("uncanva-background-model", id);
+              } catch {
+                /* Session choice remains usable. */
+              }
+            },
+            subjectArea: subjectArea?.layerId === layer?.id,
+            editSelection,
+            clearSubjectArea: () => {
+              setSubjectArea(null);
+              setTool("select");
+            },
+            cleanup: async () => {
+              await saveChain.current;
+              if (latest.current) await saveProject(latest.current);
+              const live = [
+                latest.current!,
+                ...(history.current?.past || []),
+                ...(history.current?.future || []),
+              ];
+              const result = await compactAssets(live);
+              setMessage(
+                `Removed ${result.count} unused assets (${(result.bytes / 1048576).toFixed(1)} MB). Undo and saved projects preserved.`,
+              );
+            },
+            readOnly,
             updateLayer,
             updateBoard,
             deleteSelected,
@@ -1029,7 +1400,7 @@ export default function Editor() {
           <Sparkles size={21} />
           <div>
             <strong>Would you like to remove the background?</strong>
-            <p>AI runs privately on your device. Best for portraits.</p>
+            <p>AI runs privately on your device. Choose a model in Adjust.</p>
           </div>
           <button
             className="button primary"
@@ -1077,6 +1448,44 @@ export default function Editor() {
               Cancel AI
             </button>
           )}
+        </div>
+      )}
+      <DeviceSetup
+        open={setup}
+        onClose={() => setSetup(false)}
+        onOpen={() => setSetup(true)}
+      />
+      {gallery && project && (
+        <div className="modal-backdrop">
+          <ProjectGallery
+            active={project.id}
+            readOnly={readOnly}
+            onClose={() => setGallery(false)}
+            onOpen={async (id) => {
+              await saveChain.current;
+              const p = await loadProject(id);
+              if (p) {
+                if (!readOnly) await saveProject(p);
+                history.current = new History(p);
+                latest.current = p;
+                setProject(p);
+                setSelected(null);
+                setGallery(false);
+                setPan({ x: 0, y: 0 });
+              }
+            }}
+            onNew={async () => {
+              await saveChain.current;
+              if (latest.current) await saveProject(latest.current);
+              const p = newProject();
+              await saveProject(p);
+              history.current = new History(p);
+              latest.current = p;
+              setProject(p);
+              setSelected(null);
+              setGallery(false);
+            }}
+          />
         </div>
       )}
       {showExport && (

@@ -20,6 +20,7 @@ const packages = [
   "ag-psd",
   "@jsquash/avif",
   "@jsquash/jxl",
+  "@jsquash/webp",
   "wasm-feature-detect",
   "@babel/runtime",
   "fflate",

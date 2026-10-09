@@ -115,7 +115,7 @@ export async function decodeImport(file: File) {
   try {
     bitmap = await browserDecode(blob);
   } catch {
-    if (ext === "avif" || ext === "bmp") {
+    if (ext === "avif" || ext === "bmp" || ext === "webp") {
       const data = await file.arrayBuffer();
       blob = (await job<{ blob: Blob }>({ kind: "decode", data, ext }, [data]))
         .blob;

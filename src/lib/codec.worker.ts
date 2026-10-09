@@ -64,6 +64,20 @@ async function encode(
     gif.finish();
     return new Uint8Array(gif.bytes()).buffer;
   }
+  if (type === "image/webp") {
+    const { default: factory } =
+      await import("@jsquash/webp/codec/enc/webp_enc.js");
+    const { defaultOptions } = await import("@jsquash/webp/meta.js");
+    const module = await factory({ locateFile });
+    const result = module.encode(new Uint8Array(p.data), p.width, p.height, {
+      ...defaultOptions,
+      quality: Math.round(quality * 100),
+      method: 4,
+      low_memory: 1,
+    });
+    if (!result) throw new Error("WebP encoding failed");
+    return new Uint8Array(result).buffer;
+  }
   if (type === "image/avif") {
     const { default: factory } =
       await import("@jsquash/avif/codec/enc/avif_enc.js");
@@ -180,6 +194,11 @@ async function decode(data: ArrayBuffer, ext: string): Promise<Raster> {
     const image = await module.default(data);
     if (!image) throw new Error("JPEG XL decode failed");
     return image;
+  }
+  if (ext === "webp") {
+    const module = await import("@jsquash/webp/decode");
+    await module.init({ locateFile });
+    return module.default(data);
   }
   if (ext === "avif") {
     const module = await import("@jsquash/avif/decode");

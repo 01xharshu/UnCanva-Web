@@ -1,0 +1,12 @@
+{
+  "name": "U2NetP",
+  "repo": "edgetools/u2netp",
+  "revision": "25dee37ab19c5b6ad64ba6578eba63f1ae07720c",
+  "remote": "u2netp.onnx",
+  "file": "u2netp.onnx",
+  "license": "Apache-2.0",
+  "licenseURL": "https://raw.githubusercontent.com/xuebinqin/U-2-Net/master/LICENSE",
+  "sha256": "309c8469258dda742793dce0ebea8e6dd393174f89934733ecc8b14c76f4ddd8",
+  "url": "https://huggingface.co/edgetools/u2netp/resolve/25dee37ab19c5b6ad64ba6578eba63f1ae07720c/u2netp.onnx",
+  "bytes": 4574861
+}

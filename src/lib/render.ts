@@ -32,7 +32,7 @@ const jobs = new Map<
   number,
   { resolve: (v: Uint8ClampedArray) => void; reject: (e: Error) => void }
 >();
-async function pixels(data: ImageData, l: Layer) {
+async function pixels(data: ImageData, l: Layer, blurFallback = 0) {
   worker ??= new Worker(new URL("./adjust.worker.ts", import.meta.url));
   worker.onmessage = (e) => {
     const j = jobs.get(e.data.id);
@@ -59,6 +59,7 @@ async function pixels(data: ImageData, l: Layer) {
         w: data.width,
         h: data.height,
         a: l.adjustments,
+        blurFallback,
       },
       [data.data.buffer],
     );
@@ -93,24 +94,33 @@ export async function original(id: string) {
     );
   return originals.get(id)!;
 }
-async function adjustedLayer(l: Layer) {
-  const key = JSON.stringify([l.asset, l.adjustments]);
+async function adjustedLayer(l: Layer, edge: number) {
+  const key = JSON.stringify([l.asset, l.adjustments, edge]);
   if (!prepared.has(key)) {
     const promise = (async () => {
       const img = await original(l.asset!);
-      const c = canvas(img.width, img.height),
+      const factor = Math.min(1, edge / Math.max(img.width, img.height));
+      const c = canvas(
+          Math.max(1, Math.round(img.width * factor)),
+          Math.max(1, Math.round(img.height * factor)),
+        ),
         ctx = c.getContext("2d")!;
-      ctx.drawImage(img, 0, 0);
-      const p = await pixels(ctx.getImageData(0, 0, c.width, c.height), l);
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      const nativeBlur = "filter" in ctx;
+      const p = await pixels(
+        ctx.getImageData(0, 0, c.width, c.height),
+        l,
+        nativeBlur ? 0 : l.adjustments.blur * factor,
+      );
       ctx.putImageData(
         new ImageData(new Uint8ClampedArray(p), c.width, c.height),
         0,
         0,
       );
-      if (l.adjustments.blur) {
+      if (l.adjustments.blur && nativeBlur) {
         const temp = canvas(c.width, c.height),
           t = temp.getContext("2d")!;
-        t.filter = `blur(${l.adjustments.blur}px)`;
+        t.filter = `blur(${l.adjustments.blur * factor}px)`;
         t.drawImage(c, 0, 0);
         ctx.clearRect(0, 0, c.width, c.height);
         ctx.drawImage(temp, 0, 0);
@@ -123,11 +133,11 @@ async function adjustedLayer(l: Layer) {
   }
   return prepared.get(key)!;
 }
-export async function imageLayer(l: Layer) {
-  const key = JSON.stringify([l.asset, l.mask, l.strokes, l.adjustments]);
+export async function imageLayer(l: Layer, edge = Infinity) {
+  const key = JSON.stringify([l.asset, l.mask, l.strokes, l.adjustments, edge]);
   if (!rendered.has(key)) {
     const promise = (async () => {
-      const adjusted = await adjustedLayer(l);
+      const adjusted = await adjustedLayer(l, edge);
       const c = canvas(adjusted.width, adjusted.height),
         ctx = c.getContext("2d")!;
       ctx.drawImage(adjusted, 0, 0);
@@ -139,7 +149,21 @@ export async function imageLayer(l: Layer) {
         mc.clearRect(0, 0, m.width, m.height);
         mc.drawImage(await original(l.mask), 0, 0, m.width, m.height);
       }
-      for (const stroke of l.strokes) applyStroke(mc, stroke);
+      const img = await original(l.asset!);
+      const fx = c.width / img.width,
+        fy = c.height / img.height;
+      for (const stroke of l.strokes)
+        applyStroke(
+          mc,
+          fx === 1 && fy === 1
+            ? stroke
+            : {
+                ...stroke,
+                size: stroke.size * fx,
+                aspect: ((stroke.aspect || 1) * fy) / fx,
+                points: stroke.points.map(([x, y]) => [x * fx, y * fy]),
+              },
+        );
       ctx.globalCompositeOperation = "destination-in";
       ctx.drawImage(m, 0, 0);
       return c;
@@ -154,6 +178,7 @@ export async function renderBoard(
   b: Artboard,
   width = b.width,
   height = b.height,
+  preview = false,
 ) {
   dimensions(width, height);
   const c = canvas(width, height),
@@ -171,7 +196,18 @@ export async function renderBoard(
     ctx.rotate((l.rotation * Math.PI) / 180);
     ctx.translate(-l.width / 2, -l.height / 2);
     if (l.type === "image")
-      ctx.drawImage(await imageLayer(l), 0, 0, l.width, l.height);
+      ctx.drawImage(
+        await imageLayer(
+          l,
+          preview
+            ? Math.max(256, Math.min(2048, Math.max(width, height)))
+            : Infinity,
+        ),
+        0,
+        0,
+        l.width,
+        l.height,
+      );
     else {
       ctx.fillStyle = l.color;
       if (l.type === "text") {
@@ -219,16 +255,15 @@ export async function encode(
     const { encodeExtra } = await import("./codecs");
     return encodeExtra(c, type, quality);
   }
-  return new Promise<Blob>((resolve, reject) =>
-    c.toBlob(
-      (v) =>
-        v && v.type === type
-          ? resolve(v)
-          : reject(new Error("This browser cannot encode the selected format")),
-      type,
-      quality,
-    ),
+  const blob = await new Promise<Blob | null>((resolve) =>
+    c.toBlob(resolve, type, quality),
   );
+  if (blob?.type === type) return blob;
+  if (type === "image/webp") {
+    const { encodeExtra } = await import("./codecs");
+    return encodeExtra(c, type, quality);
+  }
+  throw new Error("This browser cannot encode the selected format");
 }
 export function download(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob),

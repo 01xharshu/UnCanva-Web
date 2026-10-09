@@ -1,3 +1,4 @@
+import { HSLBand } from "./hsl";
 export type Adjustments = Record<
   | "brightness"
   | "contrast"
@@ -20,7 +21,13 @@ export type Adjustments = Record<
   | "blue"
   | "hue",
   number
-> & { curve: number[] };
+> & {
+  curve: number[];
+  redCurve: number[];
+  greenCurve: number[];
+  blueCurve: number[];
+  hsl: HSLBand[];
+};
 export const defaults: Adjustments = {
   brightness: 0,
   contrast: 0,
@@ -43,6 +50,14 @@ export const defaults: Adjustments = {
   blue: 0,
   hue: 0,
   curve: [0, 64, 128, 192, 255],
+  redCurve: [0, 64, 128, 192, 255],
+  greenCurve: [0, 64, 128, 192, 255],
+  blueCurve: [0, 64, 128, 192, 255],
+  hsl: Array.from({ length: 6 }, () => ({
+    hue: 0,
+    saturation: 0,
+    lightness: 0,
+  })),
 };
 export type Stroke = {
   points: [number, number][];
@@ -241,9 +256,32 @@ export function validateProject(value: unknown): Project {
       )
         throw new Error("Invalid layer");
       layerIds.add(l.id);
+      // Version-1 projects predate per-channel curves and HSL; migrate only absent fields.
+      for (const key of ["redCurve", "greenCurve", "blueCurve", "hsl"] as const)
+        if (l.adjustments[key] === undefined)
+          Object.assign(l.adjustments, {
+            [key]: structuredClone(defaults[key]),
+          });
       for (const [key, defaultValue] of Object.entries(defaults)) {
         const v = l.adjustments[key as keyof Adjustments];
-        if (Array.isArray(defaultValue)) {
+        if (key === "hsl") {
+          if (
+            !Array.isArray(v) ||
+            v.length !== 6 ||
+            !v.every(
+              (b) =>
+                typeof b === "object" &&
+                b &&
+                "hue" in b &&
+                "saturation" in b &&
+                "lightness" in b &&
+                number(b.hue, -180, 180) &&
+                number(b.saturation, -100, 100) &&
+                number(b.lightness, -100, 100),
+            )
+          )
+            throw new Error("Invalid HSL bands");
+        } else if (Array.isArray(defaultValue)) {
           if (
             !Array.isArray(v) ||
             v.length !== 5 ||

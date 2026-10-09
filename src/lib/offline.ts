@@ -1,10 +1,14 @@
+import { ModelId, AI_CACHE, modelURLs } from "./ai-models";
 /** Fetch only our self-hosted public assets. No document data enters this path. */
-export async function prepareOfflineAI(progress: (s: string) => void) {
+export async function prepareOfflineAI(
+  progress: (s: string) => void,
+  modelId: ModelId = "general",
+) {
   if (!("caches" in globalThis))
     throw new Error("Offline caching requires HTTPS or localhost.");
-  const cache = await caches.open("uncanva-ai-v1");
+  const cache = await caches.open(AI_CACHE);
   const urls = [
-    "/models/modnet.onnx",
+    ...modelURLs(modelId),
     "/runtime/ort-wasm-simd-threaded.asyncify.mjs",
     "/runtime/ort-wasm-simd-threaded.asyncify.wasm",
   ];

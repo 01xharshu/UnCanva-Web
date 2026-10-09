@@ -2,6 +2,7 @@ export type Tool =
   | "select"
   | "pan"
   | "crop"
+  | "subject"
   | "brush"
   | "erase"
   | "restore"

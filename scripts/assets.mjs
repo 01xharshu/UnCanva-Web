@@ -53,15 +53,17 @@ await writeFile(
 await import("./notices.mjs");
 
 await mkdir("public/codecs", { recursive: true });
-for (const codec of ["avif", "jxl"])
+for (const codec of ["avif", "jxl", "webp"])
   for (const direction of ["enc", "dec"])
     for (const name of await readdir(
       `node_modules/@jsquash/${codec}/codec/${direction}`,
     ))
-      if (/^(avif|jxl)_(enc|dec)\.wasm$/.test(name))
+      if (/^(avif|jxl|webp)_(enc|dec)\.wasm$/.test(name))
         await copyFile(
           `node_modules/@jsquash/${codec}/codec/${direction}/${name}`,
           `public/codecs/${name}`,
         );
 
 await import("./codec-notices.mjs");
+
+await import("./general-models.mjs");

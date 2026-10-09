@@ -26,6 +26,8 @@ import {
 import { backup } from "@/lib/storage";
 import { download } from "@/lib/render";
 import { prepareOfflineAI } from "@/lib/offline";
+import { bandNames } from "@/lib/hsl";
+import { models, modelIds, ModelId } from "@/lib/ai-models";
 import { Tool, Brush } from "./types";
 type Props = {
   project: Project;
@@ -42,6 +44,13 @@ type Props = {
   setBrush: Dispatch<SetStateAction<Brush>>;
   busy: string;
   removeBackground: () => Promise<void>;
+  cleanup: () => Promise<void>;
+  readOnly: boolean;
+  subjectArea: boolean;
+  clearSubjectArea: () => void;
+  editSelection: (action: "erase" | "keep" | "restore") => Promise<void>;
+  modelId: ModelId;
+  setModelId: (id: ModelId) => void;
   updateLayer: (p: Partial<Layer>) => void;
   updateBoard: (p: Partial<Artboard>) => void;
   deleteSelected: () => void;
@@ -49,7 +58,15 @@ type Props = {
   backupRef: RefObject<HTMLInputElement | null>;
   setMessage: (s: string) => void;
 };
-const controls: [keyof Omit<Adjustments, "curve">, number, number, number][] = [
+const controls: [
+  keyof Omit<
+    Adjustments,
+    "curve" | "redCurve" | "greenCurve" | "blueCurve" | "hsl"
+  >,
+  number,
+  number,
+  number,
+][] = [
   ["brightness", -100, 100, 1],
   ["contrast", -100, 100, 1],
   ["saturation", -100, 100, 1],
@@ -86,6 +103,13 @@ export default function PropertiesPanel({
   setBrush,
   busy,
   removeBackground,
+  modelId,
+  setModelId,
+  subjectArea,
+  clearSubjectArea,
+  editSelection,
+  cleanup,
+  readOnly,
   updateLayer,
   updateBoard,
   deleteSelected,
@@ -93,6 +117,10 @@ export default function PropertiesPanel({
   backupRef,
   setMessage,
 }: Props) {
+  const [curveChannel, setCurveChannel] = useState<
+    "curve" | "redCurve" | "greenCurve" | "blueCurve"
+  >("curve");
+  const [hslBand, setHslBand] = useState(0);
   const [offlineStage, setOfflineStage] = useState("");
   const [caching, setCaching] = useState(false);
   return (
@@ -117,6 +145,21 @@ export default function PropertiesPanel({
             <div className="section-label">
               SMART TOOLS <span>ON DEVICE</span>
             </div>
+            <label className="field">
+              Background model
+              <select
+                aria-label="Background model"
+                value={modelId}
+                disabled={!!busy}
+                onChange={(e) => setModelId(e.target.value as ModelId)}
+              >
+                {modelIds.map((id) => (
+                  <option key={id} value={id}>
+                    {models[id].label}
+                  </option>
+                ))}
+              </select>
+            </label>
             <button
               className="ai-button"
               disabled={layer?.type !== "image" || !!busy || layer?.locked}
@@ -127,14 +170,69 @@ export default function PropertiesPanel({
               </span>
               <span>
                 <strong>Remove background</strong>
-                <small>Local AI · portrait matting</small>
+                <small>
+                  Local AI ·{" "}
+                  {modelId === "portrait"
+                    ? "portrait matting"
+                    : "general subjects"}
+                </small>
               </span>
               <span>↗</span>
             </button>
             <p className="helper">
-              Best with people and portraits. Refine fine edges with erase &
-              restore.
+              {models[modelId].description} Refine edges with erase and restore.
             </p>
+            {layer?.type === "image" && (
+              <div className="subject-controls">
+                <button
+                  className="button"
+                  disabled={!!busy || layer.locked}
+                  onClick={() => {
+                    setTool("subject");
+                    setMessage(
+                      "Draw around the person or object, including a little surrounding background. This does not crop the artboard.",
+                    );
+                  }}
+                >
+                  Select image area
+                </button>
+                {subjectArea && (
+                  <div className="selection-actions">
+                    <button
+                      className="button"
+                      disabled={!!busy || layer.locked}
+                      onClick={() => void editSelection("erase")}
+                    >
+                      Erase selected area
+                    </button>
+                    <button
+                      className="button"
+                      disabled={!!busy || layer.locked}
+                      onClick={() => void editSelection("keep")}
+                    >
+                      Keep only selected area
+                    </button>
+                    <button
+                      className="button"
+                      disabled={!!busy || layer.locked}
+                      onClick={() => void editSelection("restore")}
+                    >
+                      Restore selected area
+                    </button>
+                  </div>
+                )}
+                {subjectArea && (
+                  <button className="text-button" onClick={clearSubjectArea}>
+                    Use whole image
+                  </button>
+                )}
+                <p className="helper">
+                  {subjectArea
+                    ? "Only the outlined area is processed. Outside becomes transparent; Restore can recover those pixels."
+                    : "Draw an area to erase, keep or restore pixels. For AI, include the subject and some surrounding background while excluding unrelated frames or graphics."}
+                </p>
+              </div>
+            )}
             {layer?.type === "image" && (
               <button
                 className="text-button"
@@ -211,7 +309,32 @@ export default function PropertiesPanel({
                     </label>
                   ))}
                   <div className="section-label">RGB TONE CURVE</div>
-                  {layer.adjustments.curve.map((v, i) => (
+                  <label className="field">
+                    Curve channel
+                    <select
+                      aria-label="Curve channel"
+                      value={curveChannel}
+                      onChange={(e) =>
+                        setCurveChannel(e.target.value as typeof curveChannel)
+                      }
+                    >
+                      {(
+                        [
+                          "curve",
+                          "redCurve",
+                          "greenCurve",
+                          "blueCurve",
+                        ] as const
+                      ).map((key) => (
+                        <option key={key} value={key}>
+                          {key === "curve"
+                            ? "Master RGB"
+                            : key.replace("Curve", "")}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {layer.adjustments[curveChannel].map((v, i) => (
                     <label className="slider-control" key={i}>
                       <span>
                         Input {[0, 64, 128, 192, 255][i]}
@@ -225,10 +348,51 @@ export default function PropertiesPanel({
                         value={v}
                         disabled={layer.locked}
                         onChange={(e) => {
-                          const curve = [...layer.adjustments.curve];
+                          const curve = [...layer.adjustments[curveChannel]];
                           curve[i] = +e.target.value;
                           updateLayer({
-                            adjustments: { ...layer.adjustments, curve },
+                            adjustments: {
+                              ...layer.adjustments,
+                              [curveChannel]: curve,
+                            },
+                          });
+                        }}
+                      />
+                    </label>
+                  ))}
+                  <div className="section-label">HSL COLOR MIXER</div>
+                  <label className="field">
+                    Color range
+                    <select
+                      aria-label="HSL color range"
+                      value={hslBand}
+                      onChange={(e) => setHslBand(+e.target.value)}
+                    >
+                      {bandNames.map((name, i) => (
+                        <option key={name} value={i}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {(["hue", "saturation", "lightness"] as const).map((key) => (
+                    <label className="slider-control" key={key}>
+                      <span>
+                        {key}
+                        <output>{layer.adjustments.hsl[hslBand][key]}</output>
+                      </span>
+                      <input
+                        type="range"
+                        aria-label={`HSL ${bandNames[hslBand]} ${key}`}
+                        min={key === "hue" ? -180 : -100}
+                        max={key === "hue" ? 180 : 100}
+                        disabled={layer.locked}
+                        value={layer.adjustments.hsl[hslBand][key]}
+                        onChange={(e) => {
+                          const hsl = structuredClone(layer.adjustments.hsl);
+                          hsl[hslBand][key] = +e.target.value;
+                          updateLayer({
+                            adjustments: { ...layer.adjustments, hsl },
                           });
                         }}
                       />
@@ -559,7 +723,7 @@ export default function PropertiesPanel({
               onClick={async () => {
                 setCaching(true);
                 try {
-                  await prepareOfflineAI(setOfflineStage);
+                  await prepareOfflineAI(setOfflineStage, modelId);
                   setMessage(
                     "AI model and runtime cached on this device. The production app also caches its shell automatically.",
                   );
@@ -577,7 +741,8 @@ export default function PropertiesPanel({
               <p className="helper">{offlineStage}</p>
             )}
             <p className="helper">
-              About 52 MB, downloaded from this website. Your images stay on
+              Selected model: {(models[modelId].bytes / 1048576).toFixed(1)} MB
+              plus runtime, downloaded from this website. Your images stay on
               your device. Browser storage can be cleared or evicted.
             </p>
             <div className="section-heading">
@@ -607,6 +772,13 @@ export default function PropertiesPanel({
               Backups include original images and every editable layer. Browser
               storage is local; keep a backup for safekeeping.
             </p>
+            <button
+              className="button full"
+              disabled={readOnly || !!busy}
+              onClick={() => void cleanup().catch((e) => setMessage(String(e)))}
+            >
+              Remove unused local assets
+            </button>
           </>
         )}
       </div>

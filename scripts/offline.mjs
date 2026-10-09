@@ -19,6 +19,7 @@ const files = (await walk("out")).filter(
 const urls = ["/", "/editor", "/editor/", ...files.map((p) => p.slice(3))];
 const hash = createHash("sha256");
 for (const file of files) hash.update(await readFile(file));
+hash.update(await readFile("public/sw.js"));
 const id = hash.digest("hex").slice(0, 16);
 await writeFile("out/offline-shell.json", JSON.stringify(urls));
 await writeFile(

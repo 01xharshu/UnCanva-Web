@@ -8,6 +8,8 @@ export default tseslint.config(
       ".next/**",
       "public/**",
       "test-results/**",
+      "tmp/**",
+      "output/**",
       "next-env.d.ts",
     ],
   },

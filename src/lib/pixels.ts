@@ -1,3 +1,4 @@
+import { applyHsl } from "./hsl";
 import { Adjustments } from "./document";
 const clamp = (v: number) => Math.max(0, Math.min(1, v));
 const knots = [0, 64, 128, 192, 255];
@@ -17,6 +18,8 @@ export function adjustPixels(
   const exp = 2 ** a.exposure,
     c = (1 + a.contrast / 100) ** 2,
     s = 1 + a.saturation / 100;
+  const hasHsl =
+    !!a.hue || a.hsl.some((b) => b.hue || b.saturation || b.lightness);
   // Exposure operates on linear-light RGB, converted back to sRGB for display controls.
   const exposure = Array.from({ length: 256 }, (_, i) => {
     const v = i / 255,
@@ -47,16 +50,8 @@ export function adjustPixels(
     r = y + (r - y) * sat;
     g = y + (g - y) * sat;
     b = y + (b - y) * sat;
-    if (a.hue) {
-      const theta = (a.hue * Math.PI) / 180,
-        co = Math.cos(theta),
-        si = Math.sin(theta),
-        u = r - y,
-        v = b - y;
-      r = y + u * co - v * si;
-      b = y + u * si + v * co;
-      g = (y - 0.2126 * r - 0.0722 * b) / 0.7152;
-    }
+    if (hasHsl)
+      [r, g, b] = applyHsl(clamp(r), clamp(g), clamp(b), a.hue, a.hsl);
     const x = (i / 4) % w,
       yy = Math.floor(i / 4 / w),
       vig =
@@ -65,13 +60,28 @@ export function adjustPixels(
           Math.min(1, ((x / w - 0.5) ** 2 + (yy / h - 0.5) ** 2) * 2);
     data[i] =
       255 *
-      clamp(curve(clamp((r - 0.5) * c + 0.5) ** (1 / a.gamma), a.curve) * vig);
+      clamp(
+        curve(
+          curve(clamp((r - 0.5) * c + 0.5) ** (1 / a.gamma), a.curve),
+          a.redCurve,
+        ) * vig,
+      );
     data[i + 1] =
       255 *
-      clamp(curve(clamp((g - 0.5) * c + 0.5) ** (1 / a.gamma), a.curve) * vig);
+      clamp(
+        curve(
+          curve(clamp((g - 0.5) * c + 0.5) ** (1 / a.gamma), a.curve),
+          a.greenCurve,
+        ) * vig,
+      );
     data[i + 2] =
       255 *
-      clamp(curve(clamp((b - 0.5) * c + 0.5) ** (1 / a.gamma), a.curve) * vig);
+      clamp(
+        curve(
+          curve(clamp((b - 0.5) * c + 0.5) ** (1 / a.gamma), a.curve),
+          a.blueCurve,
+        ) * vig,
+      );
   }
   if (a.sharpness) {
     const copy = data.slice(),

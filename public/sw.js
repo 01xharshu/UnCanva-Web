@@ -17,13 +17,15 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) =>
-        Promise.all(
-          keys
-            .filter((k) => k.startsWith("uncanva-shell-") && k !== VERSION)
+      .then((keys) => {
+        const shells = keys.filter((k) => k.startsWith("uncanva-shell-"));
+        const previous = shells.filter((k) => k !== VERSION).at(-1);
+        return Promise.all(
+          shells
+            .filter((k) => k !== VERSION && k !== previous)
             .map((k) => caches.delete(k)),
-        ),
-      )
+        );
+      })
       .then(() => self.clients.claim()),
   );
 });
@@ -33,6 +35,25 @@ self.addEventListener("fetch", (event) => {
   if (req.method !== "GET" || url.origin !== self.location.origin) return;
   event.respondWith(
     (async () => {
+      // Online navigation must see current HTML; cached HTML is the offline fallback.
+      // Keep the previous shell's chunks available until open tabs save and update.
+      if (req.mode === "navigate") {
+        const shell = await caches.open(VERSION);
+        try {
+          const response = await fetch(req, {
+            signal: AbortSignal.timeout(8000),
+          });
+          if (response.ok) await shell.put(req, response.clone());
+          return response;
+        } catch {
+          const fallback =
+            (await shell.match(req)) ||
+            (await shell.match(
+              url.pathname.startsWith("/editor") ? "/editor/" : "/",
+            ));
+          if (fallback) return fallback;
+        }
+      }
       const cached = await caches.match(req, {
         ignoreSearch:
           url.pathname.startsWith("/_next/") || url.pathname.endsWith(".txt"),

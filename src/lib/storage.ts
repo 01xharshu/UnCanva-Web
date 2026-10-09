@@ -1,12 +1,32 @@
 import { Project, validateProject } from "./document";
 function db(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const r = indexedDB.open("uncanva", 1);
+    const r = indexedDB.open("uncanva", 2);
     r.onupgradeneeded = () => {
-      r.result.createObjectStore("projects");
-      r.result.createObjectStore("assets");
+      const d = r.result;
+      if (!d.objectStoreNames.contains("projects"))
+        d.createObjectStore("projects");
+      if (!d.objectStoreNames.contains("assets")) d.createObjectStore("assets");
+      if (!d.objectStoreNames.contains("settings"))
+        d.createObjectStore("settings");
+      const projects = r.transaction!.objectStore("projects");
+      const old = projects.get("current");
+      old.onsuccess = () => {
+        if (old.result) {
+          projects.put(old.result, old.result.id);
+          projects.delete("current");
+          r.transaction!.objectStore("settings").put(old.result.id, "active");
+        }
+      };
     };
-    r.onsuccess = () => resolve(r.result);
+    r.onblocked = () =>
+      reject(
+        new Error("Close older UnCanva tabs so local storage can update."),
+      );
+    r.onsuccess = () => {
+      r.result.onversionchange = () => r.result.close();
+      resolve(r.result);
+    };
     r.onerror = () => reject(r.error);
   });
 }
@@ -29,20 +49,95 @@ async function transaction<T>(
     };
     t.onerror = t.onabort = () => {
       d.close();
-      reject(t.error || new Error("Local storage failed"));
+      reject(r.error || t.error || new Error("Local storage failed"));
     };
   });
 }
-export const saveProject = (p: Project) =>
-  transaction("projects", "readwrite", (s) => s.put(p, "current"));
-export const loadProject = async () => {
-  const p = await transaction("projects", "readonly", (s) => s.get("current"));
+export async function saveProject(p: Project) {
+  const d = await db();
+  return new Promise<void>((resolve, reject) => {
+    const t = d.transaction(["projects", "settings"], "readwrite");
+    t.objectStore("projects").put(p, p.id);
+    t.objectStore("settings").put(p.id, "active");
+    t.oncomplete = () => {
+      d.close();
+      resolve();
+    };
+    t.onabort = t.onerror = () => {
+      d.close();
+      reject(t.error || new Error("Project save failed"));
+    };
+  });
+}
+export const loadProject = async (id?: string) => {
+  const active =
+    id || (await transaction("settings", "readonly", (s) => s.get("active")));
+  if (!active) return null;
+  const p = await transaction("projects", "readonly", (s) => s.get(active));
   return p ? validateProject(p) : null;
 };
-export const putAsset = (id: string, b: Blob) =>
-  transaction("assets", "readwrite", (s) => s.put(b, id));
-export const getAsset = (id: string): Promise<Blob | undefined> =>
-  transaction("assets", "readonly", (s) => s.get(id));
+export async function listProjects() {
+  return (await transaction("projects", "readonly", (s) => s.getAll())).map(
+    validateProject,
+  );
+}
+export async function deleteProject(id: string) {
+  await transaction("projects", "readwrite", (s) => s.delete(id));
+}
+/** Explicit maintenance protects all persisted projects plus live undo/redo references. */
+export async function compactAssets(live: Project[]) {
+  const d = await db();
+  return new Promise<{ count: number; bytes: number }>((resolve, reject) => {
+    const t = d.transaction(["projects", "assets"], "readwrite"),
+      ids = new Set<string>();
+    let count = 0,
+      bytes = 0;
+    const retain = (p: Project) => {
+      for (const b of p.artboards)
+        for (const l of b.layers)
+          for (const id of [l.asset, l.mask]) if (id) ids.add(id);
+    };
+    live.forEach(retain);
+    const saved = t.objectStore("projects").getAll();
+    saved.onsuccess = () => {
+      saved.result.forEach(retain);
+      const cursor = t.objectStore("assets").openCursor();
+      cursor.onsuccess = () => {
+        const c = cursor.result;
+        if (!c) return;
+        if (!ids.has(String(c.key))) {
+          count++;
+          bytes +=
+            c.value instanceof Blob ? c.value.size : c.value.data.byteLength;
+          c.delete();
+        }
+        c.continue();
+      };
+    };
+    t.oncomplete = () => {
+      d.close();
+      resolve({ count, bytes });
+    };
+    t.onabort = t.onerror = () => {
+      d.close();
+      reject(t.error || new Error("Storage cleanup failed"));
+    };
+  });
+}
+export const putAsset = async (id: string, b: Blob) => {
+  // ArrayBuffer records avoid browser-specific IndexedDB Blob serialization failures.
+  const data = await b.arrayBuffer();
+  return transaction("assets", "readwrite", (s) =>
+    s.put({ data, type: b.type }, id),
+  );
+};
+export const getAsset = async (id: string): Promise<Blob | undefined> => {
+  const value = await transaction("assets", "readonly", (s) => s.get(id));
+  if (!value) return undefined;
+  return value instanceof Blob
+    ? value
+    : new Blob([value.data], { type: value.type || "image/png" });
+};
 export async function backup(p: Project) {
   const ids = new Set(
     p.artboards.flatMap((b) =>

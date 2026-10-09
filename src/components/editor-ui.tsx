@@ -29,20 +29,32 @@ export function Thumbnail({ board }: { board: Artboard }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     let live = true;
-    renderBoard(
-      board,
-      160,
-      Math.max(1, Math.round((160 * board.height) / board.width)),
-    )
-      .then((c) => {
-        if (live && ref.current) {
-          ref.current.width = c.width;
-          ref.current.height = c.height;
-          ref.current.getContext("2d")!.drawImage(c, 0, 0);
-        }
-      })
-      .catch(() => {});
+    const timer = setTimeout(() => {
+      renderBoard(
+        board,
+        Math.max(
+          1,
+          Math.round((160 * board.width) / Math.max(board.width, board.height)),
+        ),
+        Math.max(
+          1,
+          Math.round(
+            (160 * board.height) / Math.max(board.width, board.height),
+          ),
+        ),
+        true,
+      )
+        .then((c) => {
+          if (live && ref.current) {
+            ref.current.width = c.width;
+            ref.current.height = c.height;
+            ref.current.getContext("2d")!.drawImage(c, 0, 0);
+          }
+        })
+        .catch(() => {});
+    }, 100);
     return () => {
+      clearTimeout(timer);
       live = false;
     };
   }, [board]);

@@ -10,3 +10,5 @@ public/models/*.onnx
 public/codecs/*.wasm
 output/
 tmp/
+
+public/models/birefnet/*.bin

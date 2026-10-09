@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 test("import, edit, layers, undo, persistence, backup and exports", async ({
   page,
 }) => {
@@ -102,24 +103,18 @@ test("clipboard paste, mask erase/restore, local AI and offline reload", async (
   });
   await page.goto("/editor");
   await expect(page.getByText("A little idea.")).toBeVisible();
-  await page.evaluate(async () => {
-    const c = document.createElement("canvas");
-    c.width = c.height = 128;
-    const x = c.getContext("2d")!;
-    x.fillStyle = "#cfd3e0";
-    x.fillRect(0, 0, 128, 128);
-    x.fillStyle = "#806dce";
-    x.fillRect(40, 20, 48, 100);
-    const blob = await new Promise<Blob>((resolve) =>
-      c.toBlob((b) => resolve(b!)),
-    );
-    const file = new File([blob], "pasted.png", { type: "image/png" });
+  const photo = (await readFile("tests/fixtures/coffee.png")).toString(
+    "base64",
+  );
+  await page.evaluate(async (base64) => {
+    const bytes = Uint8Array.from(atob(base64), (ch) => ch.charCodeAt(0));
+    const file = new File([bytes], "pasted.png", { type: "image/png" });
     const dt = new DataTransfer();
     dt.items.add(file);
     document.body.dispatchEvent(
       new ClipboardEvent("paste", { clipboardData: dt, bubbles: true }),
     );
-  });
+  }, photo);
   await expect(
     page.getByText("Would you like to remove the background?"),
   ).toBeVisible();
