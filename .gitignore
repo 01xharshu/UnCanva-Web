@@ -12,3 +12,9 @@ output/
 tmp/
 
 public/models/birefnet/*.bin
+
+public/codecs/raw/
+public/codecs/heif.js
+public/codecs/pdf.worker.mjs
+public/codecs/lcms.min.js
+public/codecs/sources/*.tar.gz

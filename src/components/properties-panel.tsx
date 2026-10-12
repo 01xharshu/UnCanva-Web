@@ -1,4 +1,5 @@
 "use client";
+import ColorManagement from "./color-management";
 import { Dispatch, SetStateAction, RefObject, useState } from "react";
 import {
   Sparkles,
@@ -47,11 +48,17 @@ type Props = {
   cleanup: () => Promise<void>;
   readOnly: boolean;
   subjectArea: boolean;
+  selectObject: () => Promise<void>;
+  wandTolerance: number;
+  setWandTolerance: (n: number) => void;
+  wandContiguous: boolean;
+  setWandContiguous: (b: boolean) => void;
   clearSubjectArea: () => void;
   editSelection: (action: "erase" | "keep" | "restore") => Promise<void>;
   modelId: ModelId;
   setModelId: (id: ModelId) => void;
   updateLayer: (p: Partial<Layer>) => void;
+  developRAW: () => Promise<void>;
   updateBoard: (p: Partial<Artboard>) => void;
   deleteSelected: () => void;
   add: (t: Layer["type"]) => void;
@@ -105,12 +112,13 @@ export default function PropertiesPanel({
   removeBackground,
   modelId,
   setModelId,
-  subjectArea,
+  subjectArea, selectObject, wandTolerance, setWandTolerance, wandContiguous, setWandContiguous,
   clearSubjectArea,
   editSelection,
   cleanup,
   readOnly,
   updateLayer,
+  developRAW,
   updateBoard,
   deleteSelected,
   add,
@@ -182,8 +190,31 @@ export default function PropertiesPanel({
             <p className="helper">
               {models[modelId].description} Refine edges with erase and restore.
             </p>
+            {layer?.rawSource && layer.rawOptions && <section className="subject-controls"><h3>Camera RAW development</h3>
+              <p className="helper">The source RAW file stays in this local project. Rebuild the rendered layer after changing settings.</p>
+              <label className="field"><input type="checkbox" aria-label="Full resolution RAW" checked={!layer.rawOptions.halfSize} onChange={e=>updateLayer({rawOptions:{...layer.rawOptions!,halfSize:!e.target.checked}})} /> Develop at full resolution</label>
+              <label className="field">White balance<select aria-label="RAW white balance" value={layer.rawOptions.whiteBalance} onChange={e=>updateLayer({rawOptions:{...layer.rawOptions!,whiteBalance:e.target.value as "camera"|"auto"}})}><option value="camera">Camera metadata</option><option value="auto">Automatic</option></select></label>
+              <label className="slider-control"><span>Exposure · {layer.rawOptions.exposure} EV</span><input aria-label="RAW exposure" type="range" min="-3" max="3" step="0.1" value={layer.rawOptions.exposure} onChange={e=>updateLayer({rawOptions:{...layer.rawOptions!,exposure:+e.target.value}})} /></label>
+              <label className="slider-control"><span>Denoise · {layer.rawOptions.denoise}</span><input aria-label="RAW denoise" type="range" min="0" max="100" step="1" value={layer.rawOptions.denoise} onChange={e=>updateLayer({rawOptions:{...layer.rawOptions!,denoise:+e.target.value}})} /></label>
+              <button className="button" disabled={!!busy||layer.locked} onClick={()=>void developRAW()}>Develop from original RAW</button>
+            </section>}
+            {board && <ColorManagement board={board} layer={layer} updateBoard={updateBoard} updateLayer={updateLayer} setMessage={setMessage} />}
+            {layer?.type === "path" && layer.pathPoints && <div className="subject-controls">
+              <h3>Path nodes</h3>
+              <div style={{maxHeight:220,overflowY:"auto"}}>{layer.pathPoints.map((point,index)=><div key={index} style={{display:"flex",gap:6}}><span>{index+1}</span>{point.map((v,axis)=><input key={axis} aria-label={`Node ${index+1} ${axis?"Y":"X"}`} type="number" min="0" max="1" step="0.01" value={v} onChange={e=>{const points=layer.pathPoints!.map(p=>[...p] as [number,number]);points[index][axis]=Math.max(0,Math.min(1,Number(e.target.value)));updateLayer({pathPoints:points,pathData:"M "+points.map(p=>p.join(" ")).join(" L ")+" Z"});}} />)}</div>)}</div>
+            </div>}
+            {layer?.type === "path" && <div className="subject-controls">
+              <h3>Vector path</h3>
+              <label>SVG path data<textarea aria-label="Vector path data" value={layer.pathData || ""} onChange={e => { if (/^[MmLlHhVvCcSsQqTtAaZz0-9.,+\-\seE]*$/.test(e.target.value)) updateLayer({pathData:e.target.value,pathPoints:undefined}); }} /></label>
+              <p className="helper">SVG M/L/C/Q/A commands are editable. Drawn outlines also have editable nodes in Layer properties.</p>
+            </div>}
             {layer?.type === "image" && (
               <div className="subject-controls">
+                <button className="button" disabled={!!busy || layer.locked} onClick={() => setTool("lasso")}>Freehand lasso</button>
+                <button className="button" disabled={!!busy || layer.locked} onClick={() => setTool("wand")}>Magic wand</button>
+                <label>Wand tolerance {wandTolerance}<input aria-label="Wand tolerance" type="range" min="0" max="255" value={wandTolerance} onChange={e => setWandTolerance(Number(e.target.value))} /></label>
+                <label><input type="checkbox" checked={wandContiguous} onChange={e => setWandContiguous(e.target.checked)} /> Connected pixels only</label>
+                <button className="button" disabled={!!busy || layer.locked} onClick={() => void selectObject()}>Select object automatically</button>
                 <button
                   className="button"
                   disabled={!!busy || layer.locked}

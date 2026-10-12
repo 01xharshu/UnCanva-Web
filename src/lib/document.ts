@@ -70,9 +70,15 @@ export type Stroke = {
 export type Layer = {
   id: string;
   name: string;
-  type: "image" | "text" | "rect" | "ellipse";
+  type: "image" | "text" | "rect" | "ellipse" | "path";
+  pathData?: string;
+  pathBox?: [number, number];
+  pathPoints?: [number, number][];
   asset?: string;
   mask?: string;
+  rawSource?: string;
+  rawSourceName?: string;
+  rawOptions?: { halfSize: boolean; whiteBalance: "camera" | "auto"; exposure: number; denoise: number };
   strokes: Stroke[];
   x: number;
   y: number;
@@ -93,6 +99,8 @@ export type Artboard = {
   width: number;
   height: number;
   background: string;
+  colorProfile?: string;
+  colorProfileName?: string;
   layers: Layer[];
 };
 export type Project = {
@@ -228,6 +236,8 @@ export function validateProject(value: unknown): Project {
       !(b.background === "transparent" || /^#[0-9a-f]{6}$/i.test(b.background))
     )
       throw new Error("Invalid artboard");
+    if (b.colorProfile && (!text(b.colorProfile,6000000) || !/^data:[a-z0-9/+.-]*;base64,[A-Za-z0-9+/=]+$/.test(b.colorProfile))) throw new Error("Invalid ICC profile data");
+    if (b.colorProfileName && !text(b.colorProfileName)) throw new Error("Invalid ICC profile name");
     boardIds.add(b.id);
     dimensions(b.width, b.height);
     if (!Array.isArray(b.layers) || b.layers.length > 500)
@@ -238,7 +248,7 @@ export function validateProject(value: unknown): Project {
         !text(l.id) ||
         layerIds.has(l.id) ||
         !text(l.name) ||
-        !["image", "text", "rect", "ellipse"].includes(l.type) ||
+        !["image", "text", "rect", "ellipse", "path"].includes(l.type) ||
         !Array.isArray(l.strokes) ||
         l.strokes.length > 20000 ||
         !l.adjustments ||
@@ -252,9 +262,15 @@ export function validateProject(value: unknown): Project {
         !/^#[0-9a-f]{6}$/i.test(l.color) ||
         !number(l.fontSize, 1, 10000) ||
         (l.type === "image" && !text(l.asset, 100)) ||
-        (l.mask !== undefined && !text(l.mask, 100))
+        (l.mask !== undefined && !text(l.mask, 100)) ||
+        (l.rawSource !== undefined && (l.type !== "image" || !text(l.rawSource,100))) ||
+        (l.rawSourceName !== undefined && !text(l.rawSourceName,256)) ||
+        (l.rawOptions !== undefined && (!l.rawSource || typeof l.rawOptions.halfSize!=="boolean" || !["camera","auto"].includes(l.rawOptions.whiteBalance) || !number(l.rawOptions.exposure,-3,3) || !number(l.rawOptions.denoise,0,100)))
       )
         throw new Error("Invalid layer");
+      if (l.type === "path" && (typeof l.pathData !== "string" || l.pathData.length > 100000 || !/^[MmLlHhVvCcSsQqTtAaZz0-9.,+\-\seE]*$/.test(l.pathData))) throw new Error("Invalid vector path");
+      if (l.pathBox && (!Array.isArray(l.pathBox) || l.pathBox.length !== 2 || l.pathBox.some(n=>!number(n,0.0001,8192)))) throw new Error("Invalid path coordinate space");
+      if (l.pathPoints && (!Array.isArray(l.pathPoints) || l.pathPoints.length>10000 || l.pathPoints.some(p=>!Array.isArray(p)||p.length!==2||p.some(v=>!number(v,0,1))))) throw new Error("Invalid path nodes");
       layerIds.add(l.id);
       // Version-1 projects predate per-channel curves and HSL; migrate only absent fields.
       for (const key of ["redCurve", "greenCurve", "blueCurve", "hsl"] as const)

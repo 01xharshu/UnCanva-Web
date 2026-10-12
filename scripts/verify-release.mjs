@@ -53,11 +53,29 @@ assert(
       ),
   ),
 );
-assert(
-  config.headers[0].headers
-    .find((h) => h.key === "Content-Security-Policy")
-    .value.includes("connect-src 'self'"),
-);
+const strictPageCsp = config.headers
+  .filter((r) => ["/", "/editor(.*)"].includes(r.source))
+  .flatMap((r) => r.headers)
+  .find((h) => h.key === "Content-Security-Policy")?.value;
+assert(strictPageCsp?.includes("connect-src 'self'") && !strictPageCsp.includes("'unsafe-eval'"));
+const rawCsp = config.headers.find((r) => r.source === "/codecs/raw/(.*)")?.headers
+  .find((h) => h.key === "Content-Security-Policy")?.value;
+assert(rawCsp?.includes("'unsafe-eval'") && rawCsp.includes("base-uri 'none'"));
+const advancedRequired = [
+  "codecs/heif.js", "codecs/pdf.worker.mjs", "codecs/lcms.min.js", "codecs/lcms.wasm",
+  "codecs/raw/index.js", "codecs/raw/worker.js", "codecs/raw/libraw.js", "codecs/raw/libraw.wasm",
+  "codecs/sources/manifest.json", "codecs/LICENSE-HEIF.txt", "codecs/LICENSE-LibRaw.txt",
+  "codecs/LICENSE-LCMS.txt", "codecs/LICENSE-PDFJS.txt",
+];
+for (const relative of advancedRequired) assert((await stat(`out/${relative}`)).size > 0, relative);
+const sourceManifest=JSON.parse(await readFile("out/codecs/sources/manifest.json","utf8"));
+for(const part of sourceManifest) {
+  const bytes=await readFile(`out/codecs/sources/${part.name}.tar.gz`);
+  assert.equal(bytes.length,part.bytes,`source bytes: ${part.name}`);
+  assert.equal(createHash("sha256").update(bytes).digest("hex"),part.sha256,`source checksum: ${part.name}`);
+}
+const policy=JSON.stringify(config.headers[0].headers);
+assert(policy.includes("Cross-Origin-Opener-Policy")&&policy.includes("Cross-Origin-Embedder-Policy"));
 console.log(
-  "Static Vercel artifact PASS: routes, self-hosted model checksums/chunks, runtime, codec assets, licences and security headers.",
+  "Static Vercel artifact PASS: routes, self-hosted AI and RAW/HEIF/PDF/ICC runtimes, codec notices, checksummed corresponding source archives, and static isolation/security headers.",
 );

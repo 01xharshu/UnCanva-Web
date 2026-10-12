@@ -158,6 +158,20 @@ test("clipboard paste, mask erase/restore, local AI and offline reload", async (
   await expect(
     page.getByText("AI assets cached for offline use", { exact: true }),
   ).toBeVisible({ timeout: 30000 });
+  const copies = await page.evaluate(async () => {
+    const counts: Record<string, number> = {};
+    for (const key of await caches.keys())
+      for (const request of await (await caches.open(key)).keys()) {
+        const path = new URL(request.url).pathname;
+        if (path.startsWith("/models/") || path.startsWith("/runtime/"))
+          counts[path] = (counts[path] || 0) + 1;
+      }
+    return counts;
+  });
+  expect(
+    Object.keys(copies).filter((path) => path.startsWith("/models/birefnet/")),
+  ).toHaveLength(8);
+  expect(Object.values(copies).every((count) => count === 1)).toBe(true);
   await context.setOffline(true);
   await page.reload();
   await expect(page.getByText("Offline · local workspace")).toBeVisible();

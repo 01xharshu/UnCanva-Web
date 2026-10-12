@@ -218,6 +218,9 @@ export async function renderBoard(
           .forEach((line, i) =>
             ctx.fillText(line, 0, i * l.fontSize * 1.2, l.width),
           );
+      } else if (l.type === "path") {
+        ctx.scale(l.width / (l.pathBox?.[0] || 1), l.height / (l.pathBox?.[1] || 1));
+        ctx.fill(new Path2D(l.pathData || ""));
       } else if (l.type === "rect") ctx.fillRect(0, 0, l.width, l.height);
       else {
         ctx.beginPath();

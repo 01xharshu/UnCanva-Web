@@ -34,11 +34,16 @@ createServer(async (req, res) => {
       path += ".html";
     }
     const data = await readFile(path);
+    const isRawRuntime = new URL(req.url, "http://localhost").pathname.startsWith("/codecs/raw/");
     res.writeHead(200, {
       "Content-Type": types[extname(path)] || "application/octet-stream",
       "Cache-Control": "no-cache",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Cross-Origin-Embedder-Policy": "require-corp",
       "Content-Security-Policy":
-        "default-src 'self'; img-src 'self' blob: data:; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' blob: data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+        isRawRuntime
+          ? "default-src 'self'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'"
+          : "default-src 'self'; img-src 'self' blob: data:; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' blob: data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
     });
     res.end(data);
   } catch {

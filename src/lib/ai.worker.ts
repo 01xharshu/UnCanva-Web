@@ -31,7 +31,9 @@ self.onmessage = async (
           throw new Error(
             "Model unavailable. Run npm run assets, then rebuild.",
           );
-        await modelCache?.put(url, response.clone()).catch(() => {});
+        // A controlling service worker already caches the response in this same cache.
+        if (modelCache && !(await modelCache.match(url)))
+          await modelCache.put(url, response.clone()).catch(() => {});
       }
       const part = new Uint8Array(await response.arrayBuffer());
       if (received + part.length > bytes.length)
@@ -101,14 +103,22 @@ self.onmessage = async (
         ]),
       });
     };
+    let gpuTimer: ReturnType<typeof setTimeout> | undefined;
     try {
-      if (e.data.provider === "cpu") throw new Error("CPU requested");
-      outputs = await run("webgpu");
+      if (e.data.provider === "cpu") throw new Error("WebGPU is not enabled for this browser engine");
+      outputs = await Promise.race([
+        run("webgpu"),
+        new Promise<never>((_, reject) => {
+          gpuTimer = setTimeout(() => reject(new Error("WebGPU inference exceeded 45 seconds; switching to WASM / CPU.")), 45_000);
+        }),
+      ]);
     } catch {
       await session?.release().catch(() => {});
       session = undefined;
       backend = "WASM / CPU";
       outputs = await run("wasm");
+    } finally {
+      if (gpuTimer) clearTimeout(gpuTimer);
     }
     const result = outputs[session!.outputNames[0]],
       w = Number(result.dims.at(-1)),

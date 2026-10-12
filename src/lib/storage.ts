@@ -95,7 +95,7 @@ export async function compactAssets(live: Project[]) {
     const retain = (p: Project) => {
       for (const b of p.artboards)
         for (const l of b.layers)
-          for (const id of [l.asset, l.mask]) if (id) ids.add(id);
+          for (const id of [l.asset, l.mask, l.rawSource]) if (id) ids.add(id);
     };
     live.forEach(retain);
     const saved = t.objectStore("projects").getAll();
@@ -142,7 +142,7 @@ export async function backup(p: Project) {
   const ids = new Set(
     p.artboards.flatMap((b) =>
       b.layers.flatMap((l) =>
-        [l.asset, l.mask].filter((x): x is string => !!x),
+        [l.asset, l.mask, l.rawSource].filter((x): x is string => !!x),
       ),
     ),
   );
@@ -168,14 +168,12 @@ export async function restoreBackup(file: File) {
   const p = validateProject(v.project);
   for (const b of p.artboards)
     for (const l of b.layers)
-      for (const id of [l.asset, l.mask])
+      for (const id of [l.asset, l.mask, l.rawSource])
         if (id) {
           const data = v.assets[id];
-          if (
-            typeof data !== "string" ||
-            !/^data:image\/(png|jpeg|webp);base64,/.test(data)
-          )
-            throw new Error("Invalid backup image");
+          if (typeof data !== "string") throw new Error("Invalid backup image");
+          const marker = data.indexOf(";base64,"), mime = data.slice(5, marker);
+          if (!data.startsWith("data:") || marker < 0 || !(mime === "application/octet-stream" || (/^image\//.test(mime) && /^[a-z0-9.+-]+$/.test(mime.slice(6))))) throw new Error("Invalid backup image");
           await putAsset(id, await (await fetch(data)).blob());
         }
   return p;

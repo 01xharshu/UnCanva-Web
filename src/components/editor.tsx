@@ -2,6 +2,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   MousePointer2,
+  Scan,
+  Lasso,
+  PenTool,
+  WandSparkles,
   Hand,
   Crop,
   Paintbrush,
@@ -52,7 +56,11 @@ import { useEditorLock } from "./use-editor-lock";
 import PropertiesPanel from "./properties-panel";
 import { Tool } from "./types";
 import { formats, formatInfo, acceptImages } from "@/lib/formats";
+import { exportPSD, exportSVG, importPSD, importEditableSVG } from "@/lib/interchange";
+import { decodeRAW } from "@/lib/advanced-import";
+import { importPDF } from "@/lib/advanced-import";
 import { decodeImport } from "@/lib/codecs";
+import { polygonBounds, SelectionPoint } from "@/lib/selection";
 import { applyStroke } from "@/lib/mask";
 import { SubjectRegion, subjectRegion, regionPixels } from "@/lib/ai-region";
 import { ModelId } from "@/lib/ai-models";
@@ -61,11 +69,15 @@ const tools = [
   ["select", MousePointer2, "Select · V"],
   ["pan", Hand, "Pan · H"],
   ["crop", Crop, "Crop artboard · C"],
+  ["subject", Scan, "Area selection · A"],
+  ["lasso", Lasso, "Freehand lasso · L"],
+  ["wand", WandSparkles, "Magic wand · W"],
   ["brush", Paintbrush, "Paint · B"],
   ["erase", Eraser, "Erase mask · E"],
   ["restore", RotateCcw, "Restore mask · R"],
   ["text", Type, "Add text · T"],
   ["shape", Square, "Add shape · S"],
+  ["path", PenTool, "Draw vector path · P"],
   ["zoom", ZoomIn, "Zoom · Z"],
 ] as const;
 export default function Editor() {
@@ -92,7 +104,11 @@ export default function Editor() {
   const [subjectArea, setSubjectArea] = useState<{
     layerId: string;
     rect: SubjectRegion;
+    points?: SelectionPoint[];
+    stencil?: string;
   } | null>(null);
+  const [wandTolerance, setWandTolerance] = useState(32);
+  const [wandContiguous, setWandContiguous] = useState(true);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   useEffect(() => {
     try {
@@ -322,18 +338,38 @@ export default function Editor() {
         try {
           if (f.size > 50_000_000)
             throw new Error("Images must be below 50 MB");
+          if (f.name.toLowerCase().endsWith(".pdf") || f.type === "application/pdf") {
+            setBusy("Importing PDF pages locally");
+            try { const pages = await importPDF(f); mutate(p => { const empty=p.artboards.find(b=>b.id===target);if(empty&&!empty.layers.length)p.artboards=p.artboards.filter(b=>b.id!==target);p.artboards.push(...pages); p.active = pages[0].id; }); setSelected(pages[0].layers[0].id); }
+            finally { setBusy(""); }
+            continue;
+          }
+          if (/\.psd$/i.test(f.name)) {
+            setBusy("Reading PSD layers locally");
+            try { const imported = await importPSD(f); mutate(p => {const empty=p.artboards.find(b=>b.id===target);if(empty&&!empty.layers.length)p.artboards=p.artboards.filter(b=>b.id!==target);p.artboards.push(imported.board);p.active=imported.board.id;}); setSelected(imported.board.layers.at(-1)?.id || ""); if(imported.board.layers.at(-1)?.type === "image" && localStorage.getItem("uncanva-skip-bg") !== "true") setPromptId(imported.board.layers.at(-1)!.id); if(imported.warning) setMessage(imported.warning); }
+            finally {setBusy("");} continue;
+          }
+          if (/\.svg$/i.test(f.name)) { const imported=await importEditableSVG(f);if(imported) {mutate(p=>{const empty=p.artboards.find(b=>b.id===target);if(empty&&!empty.layers.length)p.artboards=p.artboards.filter(b=>b.id!==target);p.artboards.push(imported);p.active=imported.id;});setSelected(imported.layers.at(-1)?.id||"");if(imported.layers.at(-1)?.type === "image" && localStorage.getItem("uncanva-skip-bg") !== "true") setPromptId(imported.layers.at(-1)!.id);continue;} }
+          setBusy("Decoding image locally");
           const image = await decodeImport(f),
             id = uid();
           await putAsset(id, image.blob);
+          const rawFile = "rawSource" in image ? image.rawSource : undefined;
+          const rawOptions = "rawOptions" in image ? image.rawOptions : undefined;
+          const rawSource = rawFile ? uid() : undefined;
+          if(rawSource && rawFile) await putAsset(rawSource, rawFile);
           const l = newLayer("image");
           l.asset = id;
           l.name = f.name || "Pasted image";
+          if(rawSource) { l.rawSource=rawSource; l.rawSourceName=f.name; l.rawOptions=rawOptions; }
           l.width = image.width;
           l.height = image.height;
           l.x = 0;
           l.y = 0;
           added.push(l);
+          setBusy("");
         } catch (e) {
+          setBusy("");
           setMessage(e instanceof Error ? e.message : String(e));
         }
       }
@@ -404,11 +440,89 @@ export default function Editor() {
       }),
     [mutate, selected],
   );
+  const editSelection = useCallback(
+    async (action: "erase" | "keep" | "restore") => {
+      if (
+        !editable.current ||
+        !layer?.asset ||
+        layer.locked ||
+        busy ||
+        subjectArea?.layerId !== layer.id
+      )
+        return;
+      const targetId = layer.id,
+        targetBoard = board!.id;
+      setBusy("Updating selected mask area");
+      try {
+        const image = await original(layer.asset),
+          mask = document.createElement("canvas");
+        mask.width = image.width;
+        mask.height = image.height;
+        const context = mask.getContext("2d")!;
+        context.fillStyle = "white";
+        context.fillRect(0, 0, mask.width, mask.height);
+        if (layer.mask) {
+          context.clearRect(0, 0, mask.width, mask.height);
+          context.drawImage(
+            await original(layer.mask),
+            0,
+            0,
+            mask.width,
+            mask.height,
+          );
+        }
+        for (const stroke of layer.strokes) applyStroke(context, stroke);
+        const stencil = document.createElement("canvas");
+        stencil.width = mask.width; stencil.height = mask.height;
+        const sc = stencil.getContext("2d")!;
+        sc.fillStyle = "white";
+        if (subjectArea.stencil) {
+          const bitmap = await createImageBitmap(await (await fetch(subjectArea.stencil)).blob());
+          sc.drawImage(bitmap, 0, 0, mask.width, mask.height); bitmap.close();
+        } else if (subjectArea.points) {
+          sc.beginPath(); subjectArea.points.forEach((p, i) => i ? sc.lineTo(p[0] * mask.width, p[1] * mask.height) : sc.moveTo(p[0] * mask.width, p[1] * mask.height));
+          sc.closePath(); sc.fill();
+        } else { const area = regionPixels(subjectArea.rect, mask.width, mask.height); sc.fillRect(area.x, area.y, area.width, area.height); }
+        context.globalCompositeOperation = action === "erase" ? "destination-out" : action === "keep" ? "destination-in" : "source-over";
+        context.drawImage(stencil, 0, 0);
+        context.globalCompositeOperation = "source-over";
+        const blob = await new Promise<Blob>((resolve, reject) =>
+          mask.toBlob(
+            (b) => (b ? resolve(b) : reject(new Error("Mask encoding failed"))),
+            "image/png",
+          ),
+        );
+        const id = uid();
+        await putAsset(id, blob);
+        mutate((p) => {
+          const target = p.artboards
+            .find((b) => b.id === targetBoard)
+            ?.layers.find((l) => l.id === targetId);
+          if (target) {
+            target.mask = id;
+            target.strokes = [];
+          }
+        });
+        setMessage(
+          action === "erase"
+            ? "Selected area erased. Undo or Restore reveals the original pixels."
+            : action === "keep"
+              ? "Pixels outside the selection erased. Original pixels are preserved."
+              : "Selected area restored from original pixels.",
+        );
+      } catch (error) {
+        setMessage(String(error));
+      } finally {
+        setBusy("");
+      }
+    },
+    [layer, board, busy, subjectArea, mutate],
+  );
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (
         (e.target instanceof Element ? e.target : null)?.closest(
-          "input,textarea,[contenteditable]",
+          'input,textarea,[contenteditable],[aria-modal="true"]',
         )
       )
         return;
@@ -419,12 +533,22 @@ export default function Editor() {
       }
       if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
-        deleteSelected();
+        if (subjectArea?.layerId === selected) void editSelection("erase");
+        else deleteSelected();
+      }
+      if (e.key === "Escape") {
+        setSubjectArea(null);
+        setTool("select");
+        return;
       }
       const map: Record<string, Tool> = {
         v: "select",
         h: "pan",
         c: "crop",
+        a: "subject",
+        l: "lasso",
+        w: "wand",
+        p: "path",
         b: "brush",
         e: "erase",
         r: "restore",
@@ -437,8 +561,8 @@ export default function Editor() {
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [undo, deleteSelected]);
-  async function removeBackground(id = selected) {
+  }, [undo, deleteSelected, subjectArea, selected, editSelection]);
+  async function removeBackground(id = selected, selectionOnly = false) {
     if (!editable.current) return;
     const p = latest.current,
       b = p?.artboards.find((b) => b.id === p.active),
@@ -467,6 +591,14 @@ export default function Editor() {
         }
         try {
           if (e.data.error) throw new Error(e.data.error);
+          if (selectionOnly) {
+            const bitmap = await createImageBitmap(e.data.blob);
+            const c = document.createElement("canvas"); c.width = bitmap.width; c.height = bitmap.height;
+            c.getContext("2d")!.drawImage(bitmap, 0, 0); bitmap.close();
+            setSubjectArea({ layerId, rect: { x: 0, y: 0, width: 1, height: 1 }, stencil: c.toDataURL() });
+            setMessage("Object selected locally. Erase, keep or restore the selected subject.");
+            return;
+          }
           const mask = uid();
           await putAsset(mask, e.data.blob);
           mutate((p) => {
@@ -503,6 +635,7 @@ export default function Editor() {
       worker.postMessage({
         blob,
         model: modelId,
+        provider: /\b(?:Chrome|Chromium|Edg)\//.test(navigator.userAgent) ? "auto" : "cpu",
         region: subjectArea?.layerId === l.id ? subjectArea.rect : undefined,
       });
     } catch (e) {
@@ -510,88 +643,17 @@ export default function Editor() {
       setMessage(String(e));
     }
   }
-  async function editSelection(action: "erase" | "keep" | "restore") {
-    if (
-      !editable.current ||
-      !layer?.asset ||
-      layer.locked ||
-      busy ||
-      subjectArea?.layerId !== layer.id
-    )
-      return;
-    const targetId = layer.id,
-      targetBoard = board!.id;
-    setBusy("Updating selected mask area");
+  async function developRAW(id = selected) {
+    const current=latest.current, target=current?.artboards.find(b=>b.id===current.active)?.layers.find(l=>l.id===id);
+    if(!target?.rawSource || !target.rawOptions || target.locked || busy) return;
+    setBusy("Developing camera RAW locally");
     try {
-      const image = await original(layer.asset),
-        mask = document.createElement("canvas");
-      mask.width = image.width;
-      mask.height = image.height;
-      const context = mask.getContext("2d")!;
-      context.fillStyle = "white";
-      context.fillRect(0, 0, mask.width, mask.height);
-      if (layer.mask) {
-        context.clearRect(0, 0, mask.width, mask.height);
-        context.drawImage(
-          await original(layer.mask),
-          0,
-          0,
-          mask.width,
-          mask.height,
-        );
-      }
-      for (const stroke of layer.strokes) applyStroke(context, stroke);
-      const area = regionPixels(subjectArea.rect, mask.width, mask.height);
-      if (action === "erase")
-        context.clearRect(area.x, area.y, area.width, area.height);
-      else if (action === "restore") {
-        context.fillStyle = "white";
-        context.fillRect(area.x, area.y, area.width, area.height);
-      } else {
-        context.clearRect(0, 0, mask.width, area.y);
-        context.clearRect(
-          0,
-          area.y + area.height,
-          mask.width,
-          mask.height - area.y - area.height,
-        );
-        context.clearRect(0, area.y, area.x, area.height);
-        context.clearRect(
-          area.x + area.width,
-          area.y,
-          mask.width - area.x - area.width,
-          area.height,
-        );
-      }
-      const blob = await new Promise<Blob>((resolve, reject) =>
-        mask.toBlob(
-          (b) => (b ? resolve(b) : reject(new Error("Mask encoding failed"))),
-          "image/png",
-        ),
-      );
-      const id = uid();
-      await putAsset(id, blob);
-      mutate((p) => {
-        const target = p.artboards
-          .find((b) => b.id === targetBoard)
-          ?.layers.find((l) => l.id === targetId);
-        if (target) {
-          target.mask = id;
-          target.strokes = [];
-        }
-      });
-      setMessage(
-        action === "erase"
-          ? "Selected area erased. Undo or Restore reveals the original pixels."
-          : action === "keep"
-            ? "Pixels outside the selection erased. Original pixels are preserved."
-            : "Selected area restored from original pixels.",
-      );
-    } catch (error) {
-      setMessage(String(error));
-    } finally {
-      setBusy("");
-    }
+      const source=await getAsset(target.rawSource);if(!source)throw new Error("Original camera RAW file is missing");
+      const file=new File([source],target.rawSourceName||"camera.dng",{type:source.type||"application/octet-stream"});
+      const developed=await decodeRAW(file,target.rawOptions),asset=uid();await putAsset(asset,developed.blob);
+      mutate(p=>{const l=p.artboards.find(b=>b.id===p.active)?.layers.find(l=>l.id===id);if(l)l.asset=asset;});
+      setMessage(`Camera RAW redeveloped locally · ${target.rawOptions.halfSize?"half-size preview":"full resolution"}, ${target.rawOptions.whiteBalance} white balance, ${target.rawOptions.exposure>=0?"+":""}${target.rawOptions.exposure} EV. Original RAW remains saved for further adjustments.`);
+    }catch(error){setMessage(String(error));}finally{setBusy("");}
   }
   function add(type: Layer["type"]) {
     const l = newLayer(type);
@@ -620,7 +682,7 @@ export default function Editor() {
         const w = custom.w || Math.round(b.width * scale),
           h = custom.h || Math.round(b.height * scale);
         download(
-          await encode(b, format, quality, w, h),
+          format === "image/vnd.adobe.photoshop" ? await exportPSD(b,w,h) : format === "image/svg+xml" ? await exportSVG(b,w,h) : await encode(b, format, quality, w, h),
           `${filename}${all ? "-" + b.name : ""}.${formatInfo(format).ext}`,
         );
       }
@@ -656,10 +718,12 @@ export default function Editor() {
       | "stroke"
       | "crop"
       | "paint"
-      | "subject";
+      | "subject"
+      | "path";
     base: Project;
     pan: { x: number; y: number };
     stroke?: Stroke;
+    points?: SelectionPoint[];
     origin?: [number, number];
     corner?: "tl" | "tr" | "bl" | "br";
     finished?: boolean;
@@ -674,6 +738,12 @@ export default function Editor() {
     corner: "tl" | "tr" | "bl" | "br" = "br",
   ) {
     if (!board || !project || !editable.current) return;
+    if (busy && ["subject", "lasso", "wand", "brush", "erase", "restore"].includes(tool)) {
+      setMessage(
+        "Wait for the current operation to finish, or cancel AI, before changing the mask.",
+      );
+      return;
+    }
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
     const xy = point(e);
@@ -690,6 +760,11 @@ export default function Editor() {
       };
       return;
     }
+    if (tool === "path") {
+      drag.current = { start:xy, mode:"path", base:project, pan, points:[xy] };
+      setMessage("Draw a closed vector outline. Edit its nodes in Layer properties afterward.");
+      return;
+    }
     if (tool === "text") {
       add("text");
       return;
@@ -698,12 +773,52 @@ export default function Editor() {
       add("rect");
       return;
     }
-    if (tool === "subject") {
-      if (!layer || layer.type !== "image" || layer.locked) return;
+    if (["subject", "lasso", "wand"].includes(tool)) {
+      const target =
+        layer?.type === "image"
+          ? layer
+          : [...board.layers].reverse().find((l) => {
+              const p = localPoint(l, ...xy);
+              return (
+                l.type === "image" &&
+                l.visible &&
+                !l.locked &&
+                p[0] >= 0 &&
+                p[1] >= 0 &&
+                p[0] <= l.width &&
+                p[1] <= l.height
+              );
+            });
+      if (!target || target.locked) {
+        setMessage("Select an unlocked image layer to draw an area.");
+        return;
+      }
+      setSelected(target.id);
+      if (tool === "wand") {
+        setBusy("Selecting connected colors");
+        try {
+          const source = await original(target.asset!);
+          const ratio = Math.min(1, 2048 / Math.max(source.width, source.height));
+          const c = document.createElement("canvas"); c.width = Math.round(source.width * ratio); c.height = Math.round(source.height * ratio);
+          const cx = c.getContext("2d")!; cx.drawImage(source, 0, 0, c.width, c.height);
+          const pixels = cx.getImageData(0, 0, c.width, c.height), p = localPoint(target, ...xy);
+          const worker = new Worker(new URL("../lib/selection.worker.ts", import.meta.url));
+          const data = await new Promise<ArrayBuffer>((resolve, reject) => {
+            worker.onmessage = e => e.data.error ? reject(new Error(e.data.error)) : resolve(e.data.data);
+            worker.onerror = e => reject(new Error(e.message));
+            worker.postMessage({ data: pixels.data.buffer, width: c.width, height: c.height, x: Math.floor(p[0] / target.width * c.width), y: Math.floor(p[1] / target.height * c.height), tolerance: wandTolerance, contiguous: wandContiguous }, [pixels.data.buffer]);
+          }).finally(() => worker.terminate());
+          cx.putImageData(new ImageData(new Uint8ClampedArray(data), c.width, c.height), 0, 0);
+          setSubjectArea({ layerId: target.id, rect: { x: 0, y: 0, width: 1, height: 1 }, stencil: c.toDataURL() });
+          setTool("select");
+        } catch (error) { setMessage(String(error)); } finally { setBusy(""); }
+        return;
+      }
       drag.current = {
-        start: localPoint(layer, ...xy),
-        layer,
+        start: localPoint(target, ...xy),
+        layer: target,
         mode: "subject",
+        points: tool === "lasso" ? [localPoint(target, ...xy).map((v, i) => Math.max(0, Math.min(1, v / (i ? target.height : target.width)))) as SelectionPoint] : undefined,
         base: project,
         pan,
       };
@@ -862,8 +977,15 @@ export default function Editor() {
       });
       return;
     }
+    if (d.mode === "path") { d.points!.push(xy); return; }
     if (d.mode === "paint") {
       d.stroke!.points.push(xy);
+      return;
+    }
+    if (d.mode === "subject" && d.points) {
+      const p = localPoint(d.layer!, ...xy);
+      d.points.push([Math.max(0, Math.min(1, p[0] / d.layer!.width)), Math.max(0, Math.min(1, p[1] / d.layer!.height))]);
+      setSubjectArea({ layerId: d.layer!.id, rect: polygonBounds(d.points), points: [...d.points] });
       return;
     }
     if (d.mode === "subject") {
@@ -906,6 +1028,19 @@ export default function Editor() {
     const d = drag.current;
     if (!d) return;
     drag.current = null;
+    if (d.mode === "path") {
+      const bounds=polygonBounds(d.points!);
+      if(d.points!.length<3 || bounds.width<2 || bounds.height<2) return;
+      const l=newLayer("path");l.name="Vector path";Object.assign(l,{x:bounds.x,y:bounds.y,width:bounds.width,height:bounds.height});
+      l.pathPoints=d.points!.filter((_,i)=>i%Math.max(1,Math.floor(d.points!.length/200))===0).map(p=>[(p[0]-bounds.x)/bounds.width,(p[1]-bounds.y)/bounds.height]);
+      l.pathData="M "+l.pathPoints.map(p=>p.join(" ")).join(" L ")+" Z";
+      mutate(p=>p.artboards.find(b=>b.id===p.active)!.layers.push(l));setSelected(l.id);setTool("select");return;
+    }
+    if (d.mode === "subject" && d.points) {
+      if (d.points.length >= 3) setSubjectArea({ layerId: d.layer!.id, rect: polygonBounds(d.points), points: [...d.points] });
+      else setSubjectArea(null);
+      setTool("select"); return;
+    }
     if (d.mode === "subject") {
       const rect = subjectRegion(
         d.start,
@@ -1204,7 +1339,9 @@ export default function Editor() {
                     transform: `rotate(${layer.rotation}deg)`,
                   }}
                 >
-                  <div
+                  {subjectArea.points || subjectArea.stencil ? <svg viewBox="0 0 1 1" preserveAspectRatio="none" style={{ width: "100%", height: "100%", overflow: "visible" }} aria-label="Selected image pixels">
+                    {subjectArea.points ? <polygon points={subjectArea.points.map(p => p.join(",")).join(" ")} fill="rgba(129,103,255,.2)" stroke="#a895ff" strokeWidth={2 / (layer.width * zoom)} /> : <image href={subjectArea.stencil} width="1" height="1" opacity=".35" />}
+                  </svg> : <div
                     className="ai-area"
                     aria-label="Selected subject area"
                     style={{
@@ -1213,7 +1350,7 @@ export default function Editor() {
                       width: `${subjectArea.rect.width * 100}%`,
                       height: `${subjectArea.rect.height * 100}%`,
                     }}
-                  />
+                  />}
                 </div>
               )}
               {layer && layer.visible && tool === "select" && (
@@ -1356,6 +1493,8 @@ export default function Editor() {
               }
             },
             subjectArea: subjectArea?.layerId === layer?.id,
+            selectObject: () => removeBackground(selected, true),
+            wandTolerance, setWandTolerance, wandContiguous, setWandContiguous,
             editSelection,
             clearSubjectArea: () => {
               setSubjectArea(null);
@@ -1376,6 +1515,7 @@ export default function Editor() {
             },
             readOnly,
             updateLayer,
+            developRAW,
             updateBoard,
             deleteSelected,
             add,

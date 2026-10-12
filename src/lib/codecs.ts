@@ -1,3 +1,4 @@
+import { rawExtensions, decodeRAW } from "./advanced-import";
 import { dimensions } from "./document";
 import { job } from "./codec-client";
 export async function encodeExtra(
@@ -21,6 +22,43 @@ export async function encodeExtra(
     [data],
   );
   return new Blob([result.data], { type });
+}
+async function decodeHEIF(data: ArrayBuffer): Promise<Blob> {
+  const source = `importScripts(new URL("/codecs/heif.js", self.location.origin).href);
+onmessage = async ({data}) => {
+  try {
+    const api = globalThis.__uncanvaHeif();
+    const images = new api.HeifDecoder().decode(new Uint8Array(data));
+    if (!images.length) throw new Error("Unsupported HEIF compression or invalid image");
+    const image = images[0], width = image.get_width(), height = image.get_height();
+    if (width < 1 || height < 1 || width * height > 32000000) throw new Error("Image exceeds the 32 megapixel safety limit");
+    const pixels = new ImageData(width, height);
+    await new Promise((resolve, reject) => image.display(pixels, (result) => result ? resolve() : reject(new Error("HEIF decoding failed"))));
+    const canvas = new OffscreenCanvas(width, height);
+    canvas.getContext("2d").putImageData(pixels, 0, 0);
+    postMessage({blob: await canvas.convertToBlob({type:"image/png"})});
+  } catch(error) { postMessage({error: error instanceof Error ? error.message : String(error)}); }
+};`;
+  const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+  const worker = new Worker(url);
+  try {
+    return await new Promise<Blob>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("HEIF decoding timed out")), 120000);
+      worker.onmessage = ({data: result}) => {
+        clearTimeout(timer);
+        if (result.error) reject(new Error(result.error));
+        else resolve(result.blob as Blob);
+      };
+      worker.onerror = (event) => {
+        clearTimeout(timer);
+        reject(new Error(event.message || "HEIF decoding failed"));
+      };
+      worker.postMessage(data, [data]);
+    });
+  } finally {
+    worker.terminate();
+    URL.revokeObjectURL(url);
+  }
 }
 function sanitizedSVG(text: string) {
   const document = new DOMParser().parseFromString(text, "image/svg+xml");
@@ -77,6 +115,7 @@ async function browserDecode(blob: Blob) {
 }
 export async function decodeImport(file: File) {
   let ext = file.name.split(".").at(-1)?.toLowerCase() || "";
+  if (rawExtensions.includes(ext)) return decodeRAW(file);
   if (file.type === "image/tiff") ext = "tiff";
   if (file.type === "image/svg+xml") ext = "svg";
   if (
@@ -103,9 +142,12 @@ export async function decodeImport(file: File) {
       "heif",
     ].includes(ext)
   )
-    throw new Error("Choose an image. PDF is available as an export format.");
+    throw new Error("Choose a supported image, camera RAW file, SVG, PSD or PDF.");
   let blob: Blob = file;
   if (ext === "svg") blob = sanitizedSVG(await file.text());
+  if (["heic", "heif"].includes(ext)) {
+    blob = await decodeHEIF(await file.arrayBuffer());
+  }
   if (["tiff", "tif", "psd", "jxl", "tga", "ppm", "qoi"].includes(ext)) {
     const data = await file.arrayBuffer();
     blob = (await job<{ blob: Blob }>({ kind: "decode", data, ext }, [data]))

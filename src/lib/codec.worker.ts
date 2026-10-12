@@ -1,3 +1,4 @@
+import { colorJob } from "./color";
 import { dimensions } from "./document";
 import {
   Raster,
@@ -13,13 +14,16 @@ import {
 } from "./binary-codecs";
 type Request = {
   id: number;
-  kind: "encode" | "decode" | "pdf";
+  kind: "encode" | "decode" | "pdf" | "psd-write" | "psd-read";
   width?: number;
   height?: number;
   data?: ArrayBuffer;
   type?: string;
   ext?: string;
   quality?: number;
+  children?: import("ag-psd").Layer[];
+  imageData?: ImageData;
+  xmp?: string;
   pages?: { png: ArrayBuffer; width: number; height: number }[];
 };
 const locateFile = (name: string) => "/codecs/" + name;
@@ -163,6 +167,15 @@ async function decode(data: ArrayBuffer, ext: string): Promise<Raster> {
       Number((image.t257 as number[])[0]),
     );
     tiff.decodeImage(data, image);
+    if ((image.t262 as number[])?.[0] === 5) {
+      const icc = image.t34675 as number[] | Uint8Array | undefined;
+      if (!icc?.length) throw new Error("CMYK TIFF needs an embedded ICC profile. Assign and embed the printer profile before importing.");
+      if ((image.t277 as number[])?.[0] !== 4 || (image.t258 as number[])?.some(n => n !== 8) || ((image.t284 as number[])?.[0] || 1) !== 1) throw new Error("Only chunky 8-bit CMYK TIFF is supported.");
+      const result = await colorJob({kind:"interpret",width:image.width,height:image.height,data:new Uint8Array(image.data).buffer,profile:new Uint8Array(icc).buffer});
+      const bitmap = await createImageBitmap(result.blob), canvas = new OffscreenCanvas(image.width,image.height),ctx=canvas.getContext("2d")!;
+      ctx.drawImage(bitmap,0,0);bitmap.close();
+      return {width:image.width,height:image.height,data:ctx.getImageData(0,0,image.width,image.height).data};
+    }
     return {
       width: image.width,
       height: image.height,
@@ -246,6 +259,38 @@ self.onmessage = async (e: MessageEvent<Request>) => {
       const data = pdf.output("arraybuffer");
       self.postMessage({ id: r.id, data }, [data]);
       return;
+    }
+    if (r.kind === "psd-write") {
+      const psd = await psdModule();
+      const data = psd.writePsdBuffer({ width:r.width!, height:r.height!, children:r.children, imageData:r.imageData, imageResources:{xmpMetadata:r.xmp} });
+      self.postMessage({ id:r.id, data:data.buffer.slice(data.byteOffset,data.byteOffset+data.byteLength) }); return;
+    }
+    if (r.kind === "psd-read") {
+      const module=await psdModule(), psd=module.readPsd(r.data!,{useImageData:true,skipThumbnail:true});
+      dimensions(psd.width,psd.height);
+      const layers: Record<string,unknown>[]=[];
+      let warning="External PSD layers are imported as editable pixel layers. Text, effects, masks, blend modes and adjustment layers may require rasterization in Photoshop first.";
+      const visit=async (children: import("ag-psd").Layer[], opacity=1, visible=true) => {
+        for(const l of children) {
+          if(l.children) { await visit(l.children,opacity*(l.opacity??1),visible&&!l.hidden); continue; }
+          const pixels=l.imageData; if(!pixels || !pixels.width || !pixels.height) continue;
+          dimensions(pixels.width,pixels.height);
+          const c=new OffscreenCanvas(pixels.width,pixels.height),cx=c.getContext("2d")!;
+          cx.putImageData(new ImageData(new Uint8ClampedArray(pixels.data),pixels.width,pixels.height),0,0);
+          if(l.mask?.imageData && !l.mask.disabled) {
+            const mp=l.mask.imageData, mc=new OffscreenCanvas(pixels.width,pixels.height), mx=mc.getContext("2d")!;
+            mx.fillStyle=l.mask.defaultColor===255?"white":"transparent";mx.fillRect(0,0,mc.width,mc.height);
+            const mask=new ImageData(new Uint8ClampedArray(mp.data),mp.width,mp.height);
+            for(let i=0;i<mask.data.length;i+=4) {mask.data[i+3]=mask.data[i]; mask.data[i]=mask.data[i+1]=mask.data[i+2]=255;}
+            const tmp=new OffscreenCanvas(mp.width,mp.height);tmp.getContext("2d")!.putImageData(mask,0,0);
+            mx.drawImage(tmp,(l.mask.left||0)-(l.left||0),(l.mask.top||0)-(l.top||0));cx.globalCompositeOperation="destination-in";cx.drawImage(mc,0,0);
+          }
+          layers.push({name:l.name||"PSD layer",left:l.left||0,top:l.top||0,width:pixels.width,height:pixels.height,opacity:opacity*(l.opacity??1),visible:visible&&!l.hidden,locked:!!l.protected?.composite,blob:await c.convertToBlob({type:"image/png"})});
+        }
+      };
+      await visit(psd.children||[]);
+      if(!layers.length && psd.imageData) { const p=psd.imageData,c=new OffscreenCanvas(p.width,p.height);c.getContext("2d")!.putImageData(new ImageData(new Uint8ClampedArray(p.data),p.width,p.height),0,0);layers.push({name:"PSD composite",left:0,top:0,width:p.width,height:p.height,opacity:1,visible:true,locked:false,blob:await c.convertToBlob({type:"image/png"})});warning="Only the flattened PSD composite was available."; }
+      self.postMessage({id:r.id,xmp:psd.imageResources?.xmpMetadata,width:psd.width,height:psd.height,layers,warning});return;
     }
     if (r.kind === "encode") {
       dimensions(r.width!, r.height!);

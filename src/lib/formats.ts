@@ -66,14 +66,14 @@ export const formats = [
     mime: "image/svg+xml",
     ext: "svg",
     label: "SVG",
-    note: "Raster image embedded in an SVG wrapper",
+    note: "Editable text, shapes and paths · image layers remain raster",
     quality: false,
   },
   {
     mime: "image/vnd.adobe.photoshop",
     ext: "psd",
     label: "PSD",
-    note: "Flattened raster composite · use .uncanva for editable layers",
+    note: "Separate layers and editable text · reversible UnCanva metadata",
     quality: false,
   },
   {
@@ -108,4 +108,4 @@ export const formats = [
 export const formatInfo = (mime: string) =>
   formats.find((f) => f.mime === mime) || formats[0];
 export const acceptImages =
-  "image/*,.png,.jpg,.jpeg,.jfif,.webp,.avif,.gif,.bmp,.tif,.tiff,.ico,.svg,.psd,.jxl,.tga,.ppm,.qoi,.heic,.heif";
+  "image/*,.png,.jpg,.jpeg,.jfif,.webp,.avif,.gif,.bmp,.tif,.tiff,.ico,.svg,.psd,.jxl,.tga,.ppm,.qoi,.heic,.heif,.pdf,.raw,.dng,.cr2,.cr3,.nef,.nrw,.arw,.raf,.orf,.rw2,.pef,.srw,.3fr,.fff,.iiq,.kdc,.mos,.mrw,.rwl,.x3f";

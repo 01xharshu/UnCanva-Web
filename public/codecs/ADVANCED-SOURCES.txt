@@ -1,0 +1,7 @@
+Pinned redistributable decoder sources and rebuild instructions:
+LibRaw WASM wrapper ISC: https://github.com/ybouane/LibRaw-Wasm/tree/v1.6.0 (npm package libraw-wasm 1.6.0); compileLibraw.sh with Emscripten 5.0.7.
+LibRaw 0.22.1 LGPL-2.1: https://github.com/LibRaw/LibRaw/tree/0.22.1
+LittleCMS 2.19.1 MIT: https://github.com/mm2/Little-CMS/tree/lcms2.19.1
+libheif-js 1.23.5 LGPL-3.0: https://github.com/catdad-experiments/libheif-js/tree/v1.23.5 (scripts/build.sh and build provenance in package README). Upstream libheif https://github.com/strukturag/libheif and libde265 https://github.com/strukturag/libde265.
+Mozilla PDF.js 6.4.299 Apache-2.0: https://github.com/mozilla/pdf.js
+Unmodified decoders served as replaceable separate files under /codecs/. No restriction on replacing or reverse engineering these libraries for debugging modifications.

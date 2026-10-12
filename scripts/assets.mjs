@@ -67,3 +67,4 @@ for (const codec of ["avif", "jxl", "webp"])
 await import("./codec-notices.mjs");
 
 await import("./general-models.mjs");
+await import('./advanced-assets.mjs');

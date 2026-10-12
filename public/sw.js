@@ -1,4 +1,5 @@
 const VERSION = "uncanva-shell-__BUILD__";
+const AI_CACHE = "__AI_CACHE__";
 self.addEventListener("install", (event) => {
   event.waitUntil(
     (async () => {
@@ -43,7 +44,8 @@ self.addEventListener("fetch", (event) => {
           const response = await fetch(req, {
             signal: AbortSignal.timeout(8000),
           });
-          if (response.ok) await shell.put(req, response.clone());
+          if (response.ok)
+            await shell.put(req, response.clone()).catch(() => {});
           return response;
         } catch {
           const fallback =
@@ -54,12 +56,15 @@ self.addEventListener("fetch", (event) => {
           if (fallback) return fallback;
         }
       }
-      const cached = await caches.match(req, {
+      const isAI =
+        url.pathname.startsWith("/models/") ||
+        url.pathname.startsWith("/runtime/");
+      const cache = await caches.open(isAI ? AI_CACHE : VERSION);
+      const cached = await (isAI ? cache : caches).match(req, {
         ignoreSearch:
           url.pathname.startsWith("/_next/") || url.pathname.endsWith(".txt"),
       });
       if (cached) return cached;
-      const cache = await caches.open(VERSION);
       try {
         const response = await fetch(req);
         if (
@@ -70,7 +75,7 @@ self.addEventListener("fetch", (event) => {
             url.pathname.startsWith("/models/") ||
             req.mode === "navigate")
         )
-          await cache.put(req, response.clone());
+          await cache.put(req, response.clone()).catch(() => {});
         return response;
       } catch (error) {
         if (req.mode === "navigate") {

@@ -3,11 +3,14 @@ export type Tool =
   | "pan"
   | "crop"
   | "subject"
+  | "lasso"
+  | "wand"
   | "brush"
   | "erase"
   | "restore"
   | "text"
   | "shape"
+  | "path"
   | "zoom";
 
 export type Brush = {

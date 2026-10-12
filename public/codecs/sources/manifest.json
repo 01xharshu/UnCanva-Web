@@ -1,0 +1,50 @@
+[
+  {
+    "name": "libraw-wrapper",
+    "url": "https://codeload.github.com/ybouane/LibRaw-Wasm/tar.gz/32fd36a9883a10c1632bc20073f1ea88cc60487a",
+    "bytes": 36200434,
+    "sha256": "70eaf2f4d72850e3ae787f1ff34a7feb60dd03a59d9d9172c23f860532e76504"
+  },
+  {
+    "name": "libraw",
+    "url": "https://codeload.github.com/LibRaw/LibRaw/tar.gz/0.22.1",
+    "bytes": 604601,
+    "sha256": "e676248284075605aa2697a66eeed7dc258820bd1d4988c724d29edffd726726"
+  },
+  {
+    "name": "littlecms-wrapper",
+    "url": "https://codeload.github.com/mattdesl/lcms-wasm/tar.gz/762214c66e907674c8a5538223c624291f5039dd",
+    "bytes": 206885,
+    "sha256": "3317c2d8518a34e3151fa95f7f40caa76549a7afe89c548a01fcf31ce4b2c15b"
+  },
+  {
+    "name": "littlecms",
+    "url": "https://codeload.github.com/mm2/Little-CMS/tar.gz/lcms2.19.1",
+    "bytes": 5731108,
+    "sha256": "267705e278e2f7c2fb886c259dadcbaeb2be52748bcbc71c79f08aacacb7a709"
+  },
+  {
+    "name": "heif-wrapper",
+    "url": "https://codeload.github.com/catdad-experiments/libheif-js/tar.gz/d8ec4bc3bc5bf8055975577bccbbc7e1d7313c2d",
+    "bytes": 10267,
+    "sha256": "db9c0c25b15c5c351ac5b045b01009cc446f5712091300656902f9e40a2934db"
+  },
+  {
+    "name": "heif-build",
+    "url": "https://codeload.github.com/catdad-experiments/libheif-emscripten/tar.gz/v1.23.5",
+    "bytes": 3128,
+    "sha256": "8e3395ca983e369448bea84d223c35f1117373953e00219588415f1bc37c86ea"
+  },
+  {
+    "name": "libheif",
+    "url": "https://codeload.github.com/strukturag/libheif/tar.gz/413e2a87e6a70b3eccc3a3adc5801179dd2d9e00",
+    "bytes": 2220554,
+    "sha256": "ef8e86a4e5670b7338a58b17553e306b8be88e506587b265dfdfe44495896999"
+  },
+  {
+    "name": "libde265",
+    "url": "https://codeload.github.com/strukturag/libde265/tar.gz/v1.0.15",
+    "bytes": 438453,
+    "sha256": "d4e55706dfc5b2c5c9702940b675ce2d3e7511025c6894eaddcdbaf0b15fd3f3"
+  }
+]
