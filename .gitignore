@@ -1,20 +1,34 @@
+# Dependencies and framework build output
 node_modules/
 .next/
 out/
 *.tsbuildinfo
+
+# Test reports and generated evidence
+coverage/
 test-results/
 playwright-report/
+blob-report/
+playwright/.cache/
+
+# Build-time downloaded AI models, runtimes, and codec binaries
 public/runtime/
 public/models/*.onnx
-
-public/codecs/*.wasm
-output/
-tmp/
-
 public/models/birefnet/*.bin
-
+public/codecs/*.wasm
 public/codecs/raw/
 public/codecs/heif.js
 public/codecs/pdf.worker.mjs
 public/codecs/lcms.min.js
 public/codecs/sources/*.tar.gz
+
+# Local exports, scratch files, and temporary artifacts
+output/
+tmp/
+
+# Local environment and operating-system metadata
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db

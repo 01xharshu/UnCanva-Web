@@ -26,6 +26,16 @@ test('lasso and color wand edit non-destructive masks, retain undo and save',asy
  await page.getByRole('button',{name:'Keep only selected area',exact:true}).click();await expect.poll(()=>alpha(page,.1,.1)).toBe(0);
  await page.waitForTimeout(900);await page.reload();await expect.poll(()=>alpha(page,.5,.5)).toBe(255);expect(await alpha(page,.1,.1)).toBe(0);
 });
+test('automatic object selection uses local inference and leaves source pixels unchanged until applied',async({page})=>{
+ test.setTimeout(180000);
+ await page.goto('/editor/');await expect(page.getByRole('button',{name:'Choose an image',exact:true})).toBeVisible();
+ await page.locator('input[type=file]').first().setInputFiles({name:'coffee.png',mimeType:'image/png',buffer:await readFile('tests/fixtures/coffee.png')});await page.getByRole('button',{name:'Keep original',exact:true}).click();
+ await page.getByRole('button',{name:'Adjust',exact:true}).click();await page.getByLabel('Background model').selectOption({label:'General subjects · fast'});
+ await expect.poll(()=>alpha(page,.5,.5)).toBe(255);const before=await alpha(page,.5,.5);await page.getByRole('button',{name:'Select object automatically'}).click();
+ await expect(page.getByRole('button',{name:'Erase selected area',exact:true})).toBeEnabled({timeout:150000});
+ await expect(page.getByText(/Object selected locally/)).toBeVisible();expect(await alpha(page,.5,.5)).toBe(before);
+ await page.keyboard.press('Escape');await expect(page.getByLabel('Selected image pixels')).not.toBeVisible();
+});
 test('native layered PSD and vector SVG retain editable document structure, PDF pages import',async({page})=>{ test.setTimeout(45000);
  await fixture(page);await page.getByRole('button',{name:'Layer',exact:true}).click();await page.getByRole('button',{name:'Rectangle',exact:true}).click();
  await page.getByLabel('Layer width',{exact:true}).fill('30');await page.getByLabel('Layer height',{exact:true}).fill('30');
